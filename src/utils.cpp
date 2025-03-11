@@ -156,7 +156,7 @@ std::string utils::strcompress(const std::string &text)
   }
 
   // remove trailing blank
-  if (output.back() == ' ') output.erase(output.size() - 1, 1);
+  if (!output.empty() && output.back() == ' ') output.erase(output.size() - 1, 1);
   return output;
 }
 
@@ -234,9 +234,9 @@ std::string utils::point_to_error(Input *input, int failed)
       // construct and append error indicator line
       cmdline += '\n';
       cmdline += std::string(indicator, ' ');
-      cmdline += std::string(strlen(input->arg[failed]) + quoted, '^');
+      cmdline += std::string(strlen((failed < 0) ? input->command : input->arg[failed])
+                             + quoted, '^');
       cmdline += '\n';
-
     } else {
       cmdline += lastline;
       cmdline += '\n';
