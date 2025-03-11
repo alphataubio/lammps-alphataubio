@@ -84,7 +84,15 @@ PairPACEKokkos<DeviceType>::~PairPACEKokkos()
   memoryKK->destroy_kokkos(k_eatom,eatom);
   memoryKK->destroy_kokkos(k_vatom,vatom);
 
-  // deallocate views of views in serial to prevent issues in Kokkos tools
+  deallocate_views_of_views();
+}
+
+/* ---------------------------------------------------------------------- */
+
+template<class DeviceType>
+void PairPACEKokkos<DeviceType>::deallocate_views_of_views()
+{
+  // deallocate views of views in serial to prevent race conditions
 
   if (k_splines_gk.h_view.data()) {
     for (int i = 0; i < nelements; i++) {
@@ -240,15 +248,7 @@ void PairPACEKokkos<DeviceType>::copy_splines()
 {
   auto basis_set = aceimpl->basis_set;
 
-  if (k_splines_gk.d_view.data()) {
-    for (int i = 0; i < nelements; i++) {
-      for (int j = 0; j < nelements; j++) {
-        k_splines_gk.h_view(i, j).deallocate();
-        k_splines_rnl.h_view(i, j).deallocate();
-        k_splines_hc.h_view(i, j).deallocate();
-      }
-    }
-  }
+  deallocate_views_of_views();
 
   k_splines_gk = Kokkos::DualView<SplineInterpolatorKokkos**, DeviceType>("pace:splines_gk", nelements, nelements);
   k_splines_rnl = Kokkos::DualView<SplineInterpolatorKokkos**, DeviceType>("pace:splines_rnl", nelements, nelements);
@@ -753,8 +753,8 @@ void PairPACEKokkos<DeviceType>::compute(int eflag_in, int vflag_in)
 
   // free duplicated memory
   if (need_dup) {
-    dup_f     = decltype(dup_f)();
-    dup_vatom = decltype(dup_vatom)();
+    dup_f     = {};
+    dup_vatom = {};
   }
 }
 
@@ -845,7 +845,6 @@ void PairPACEKokkos<DeviceType>::operator() (TagPairPACEComputeNeigh,const typen
                [&](const int offset, minloc_value_type &min_d_dist) {
                  int j = d_nearest(ii,offset);
                  j &= NEIGHMASK;
-                 const int jtype = type(j);
                  auto r = d_rnorms(ii,offset);
                  const int mu_j = d_map(type(j));
                  const F_FLOAT d = r - (d_cut_in(mu_i, mu_j) - d_dcut_in(mu_i, mu_j));
@@ -1562,7 +1561,7 @@ template<int NEIGHFLAG, int EVFLAG>
 KOKKOS_INLINE_FUNCTION
 void PairPACEKokkos<DeviceType>::operator() (TagPairPACEComputeForce<NEIGHFLAG,EVFLAG>, const int& ii, EV_FLOAT& ev) const
 {
-  // The f array is duplicated for OpenMP, atomic for CUDA, and neither for Serial
+  // The f array is duplicated for OpenMP, atomic for GPU, and neither for Serial
   const auto v_f = ScatterViewHelper<NeedDup_v<NEIGHFLAG,DeviceType>,decltype(dup_f),decltype(ndup_f)>::get(dup_f,ndup_f);
   const auto a_f = v_f.template access<AtomicDup_v<NEIGHFLAG,DeviceType>>();
 
@@ -1631,7 +1630,7 @@ void PairPACEKokkos<DeviceType>::v_tally_xyz(EV_FLOAT &ev, const int &i, const i
       const F_FLOAT &fx, const F_FLOAT &fy, const F_FLOAT &fz,
       const F_FLOAT &delx, const F_FLOAT &dely, const F_FLOAT &delz) const
 {
-  // The vatom array is duplicated for OpenMP, atomic for CUDA, and neither for Serial
+  // The vatom array is duplicated for OpenMP, atomic for GPU, and neither for Serial
 
   auto v_vatom = ScatterViewHelper<NeedDup_v<NEIGHFLAG,DeviceType>,decltype(dup_vatom),decltype(ndup_vatom)>::get(dup_vatom,ndup_vatom);
   auto a_vatom = v_vatom.template access<AtomicDup_v<NEIGHFLAG,DeviceType>>();

@@ -43,9 +43,8 @@ using namespace MathConst;
 using namespace MathExtra;
 using namespace MathSpecial;
 
-#define DELTA 4
-#define PGDELTA 1
-#define MAXNEIGH 24
+static constexpr int DELTA = 4;
+static constexpr int MAXNEIGH = 24;
 
 /* ---------------------------------------------------------------------- */
 
@@ -165,7 +164,7 @@ void PairComb3::settings(int narg, char **arg)
   else error->all(FLERR,"Illegal pair_style command");
 
   if (comm->me == 0 && screen)
-    fmt::print(screen,"   PairComb3: polarization is {} \n",
+    utils::print(screen,"   PairComb3: polarization is {} \n",
                pol_flag ? "on" : "off");
 }
 
