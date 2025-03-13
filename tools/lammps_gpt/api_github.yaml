@@ -1,0 +1,557 @@
+openapi: 3.1.0
+info: { title: GitHub API, version: 1.0.2 }
+servers:
+  - url: https://api.github.com
+paths:
+
+  ######## FILES ########
+
+  /repos/{owner}/{repo}/contents:
+    get:
+      operationId: repo_contents
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string } }
+        - { name: repo, in: path, required: true, schema: { type: string } }
+        - { name: ref, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response with repository contents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileItem"
+
+  /repos/{owner}/{repo}/contents/{path}:
+    get:
+      operationId: repo_contents_path
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string } }
+        - { name: repo, in: path, required: true, schema: { type: string } }
+        - { name: path, in: path, required: true, schema: { type: string } }
+        - { name: ref, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response with file or directory contents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FileItem"
+
+    put:
+      operationId: create_update_file
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: path, in: path, required: true, schema: { type: string }, description: "The file path in the repository." }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrUpdateFileRequest"
+      responses:
+        "200":
+          description: Successful response when updating a file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileResponse"
+        "201":
+          description: Successful response when creating a new file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileResponse"
+        "400":
+          description: Bad request if required parameters are missing
+        "404":
+          description: Not found if repository or file path does not exist
+        "409":
+          description: Conflict if there is a merge conflict or outdated SHA
+
+  ######## SEARCH ########
+
+  /search/repositories:
+    get:
+      operationId: search_repositories
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search keywords, qualifiers, and filters." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [stars, forks, help-wanted-issues, updated] }, description: "Sort by criteria." }
+        - { name: order, in: query, required: false, schema: { type: string, enum: [desc, asc] }, description: "Sort order." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  /search/code:
+    get:
+      operationId: search_code
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search keywords and qualifiers." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [indexed] }, description: "Sort criteria." }
+        - { name: order, in: query, required: false, schema: { type: string, enum: [desc, asc] }, description: "Sort order." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  /search/commits:
+    get:
+      operationId: search_commits
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search keywords and qualifiers." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [author-date, committer-date] }, description: "Sort criteria." }
+        - { name: order, in: query, required: false, schema: { type: string, enum: [desc, asc] }, description: "Sort order." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  /search/issues:
+    get:
+      operationId: search_issues
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search keywords and qualifiers." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [comments, created, updated] }, description: "Sort criteria." }
+        - { name: order, in: query, required: false, schema: { type: string, enum: [desc, asc] }, description: "Sort order." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  /search/users:
+    get:
+      operationId: search_users
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search keywords and qualifiers." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [followers, repositories, joined] }, description: "Sort criteria." }
+        - { name: order, in: query, required: false, schema: { type: string, enum: [desc, asc] }, description: "Sort order." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  /search/topics:
+    get:
+      operationId: search_topics
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search keywords for topics." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  ######## PULL REQUESTS ########
+
+  /repos/{owner}/{repo}/pulls:
+    get:
+      operationId: list_pull_requests
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [open, closed, all] }, description: "State of PRs to return." }
+        - { name: head, in: query, required: false, schema: { type: string }, description: "Filter by head branch (e.g., user:branch)." }
+        - { name: base, in: query, required: false, schema: { type: string }, description: "Filter by base branch." }
+        - { name: sort, in: query, required: false, schema: { type: string, enum: [created, updated, popularity, long-running] }, description: "Sort order." }
+        - { name: direction, in: query, required: false, schema: { type: string, enum: [asc, desc] }, description: "Sort direction." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with list of pull requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PullRequest"
+
+  /repos/{owner}/{repo}/pulls/{pull_number}:
+    get:
+      operationId: get_pull_request
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: pull_number, in: path, required: true, schema: { type: integer }, description: "Pull request number." }
+      responses:
+        "200":
+          description: Successful response with pull request details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequest"
+
+  /repos/{owner}/{repo}/pulls/{pull_number}/files:
+    get:
+      operationId: list_pull_request_files
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: pull_number, in: path, required: true, schema: { type: integer }, description: "Pull request number." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with list of files in the PR
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PullRequestFile"
+
+  /repos/{owner}/{repo}/pulls/{pull_number}/reviews:
+    get:
+      operationId: list_pull_request_reviews
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: pull_number, in: path, required: true, schema: { type: integer }, description: "Pull request number." }
+      responses:
+        "200":
+          description: Successful response with list of reviews for the PR
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PullRequestReview"
+
+  /repos/{owner}/{repo}/pulls/{pull_number}/comments:
+    get:
+      operationId: list_pull_request_comments
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: pull_number, in: path, required: true, schema: { type: integer }, description: "Pull request number." }
+      responses:
+        "200":
+          description: Successful response with list of comments on the PR
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PullRequestComment"
+
+
+  ######## BRANCHES ########
+
+  /repos/{owner}/{repo}/branches:
+    get:
+      operationId: list_branches
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: protected, in: query, required: false, schema: { type: boolean }, description: "Filter to only protected branches." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with list of branches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Branch"
+
+  /repos/{owner}/{repo}/branches/{branch}:
+    get:
+      operationId: get_branch
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: branch, in: path, required: true, schema: { type: string }, description: "Branch name." }
+      responses:
+        "200":
+          description: Successful response with branch details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+
+  ######## COMMITS ########
+
+  /repos/{owner}/{repo}/commits:
+    get:
+      operationId: list_commits
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: sha, in: query, required: false, schema: { type: string }, description: "SHA or branch name to filter commits." }
+        - { name: path, in: query, required: false, schema: { type: string }, description: "File path to filter commits by file." }
+        - { name: author, in: query, required: false, schema: { type: string }, description: "GitHub username or email to filter commits by author." }
+        - { name: since, in: query, required: false, schema: { type: string, format: date-time }, description: "Filter commits since a specific time (ISO 8601 format)." }
+        - { name: until, in: query, required: false, schema: { type: string, format: date-time }, description: "Filter commits until a specific time (ISO 8601 format)." }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 30, minimum: 1, maximum: 100 }, description: "Results per page." }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 }, description: "Page number of results." }
+      responses:
+        "200":
+          description: Successful response with list of commits
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Commit"
+
+  /repos/{owner}/{repo}/commits/{ref}:
+    get:
+      operationId: get_commit
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: ref, in: path, required: true, schema: { type: string }, description: "Commit SHA, branch, or tag." }
+      responses:
+        "200":
+          description: Successful response with commit details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Commit"
+
+  /repos/{owner}/{repo}/commits/{ref}/comments:
+    get:
+      operationId: list_commit_comments
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string }, description: "GitHub username or organization." }
+        - { name: repo, in: path, required: true, schema: { type: string }, description: "Repository name." }
+        - { name: ref, in: path, required: true, schema: { type: string }, description: "Commit SHA, branch, or tag." }
+      responses:
+        "200":
+          description: Successful response with list of comments on the commit
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CommitComment"
+
+
+
+components:
+  schemas:
+    Branch:
+      type: object
+      properties:
+        name: { type: string }
+        protected: { type: boolean }
+        commit: 
+          type: object
+          properties:
+            sha: { type: string }
+            url: { type: string }
+
+    FileItem:
+      type: object
+      properties:
+        name: { type: string }
+        path: { type: string }
+        type: { type: string, enum: [file, dir] }
+        download_url: { type: string, nullable: true }
+
+    SearchResult:
+      type: object
+      properties:
+        total_count: { type: integer }
+        incomplete_results: { type: boolean }
+        items: { type: array, items: { type: object } }
+
+    PullRequest:
+      type: object
+      properties:
+        id: { type: integer }
+        number: { type: integer }
+        state: { type: string, enum: [open, closed] }
+        title: { type: string }
+        user: { type: object, properties: { login: { type: string }, id: { type: integer } } }
+        body: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        merged_at: { type: string, format: date-time, nullable: true }
+        draft: { type: boolean }
+        head: { type: object, properties: { ref: { type: string }, sha: { type: string } } }
+        base: { type: object, properties: { ref: { type: string }, sha: { type: string } } }
+
+    PullRequestFile:
+      type: object
+      properties:
+        filename: { type: string }
+        status: { type: string, enum: [added, modified, removed] }
+        additions: { type: integer }
+        deletions: { type: integer }
+        changes: { type: integer }
+        raw_url: { type: string }
+        blob_url: { type: string }
+        patch: { type: string, nullable: true }
+
+    PullRequestReview:
+      type: object
+      properties:
+        id: { type: integer }
+        user: { type: object, properties: { login: { type: string }, id: { type: integer } } }
+        body: { type: string, nullable: true }
+        state: { type: string, enum: [APPROVED, CHANGES_REQUESTED, COMMENTED] }
+        submitted_at: { type: string, format: date-time }
+
+    PullRequestComment:
+      type: object
+      properties:
+        id: { type: integer }
+        user: { type: object, properties: { login: { type: string }, id: { type: integer } } }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Commit:
+      type: object
+      properties:
+        sha: { type: string }
+        commit: 
+          type: object
+          properties:
+            author:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string }
+                date: { type: string, format: date-time }
+            committer:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string }
+                date: { type: string, format: date-time }
+            message: { type: string }
+        author: 
+          type: object
+          properties:
+            login: { type: string }
+            id: { type: integer }
+        committer: 
+          type: object
+          properties:
+            login: { type: string }
+            id: { type: integer }
+        parents:
+          type: array
+          items:
+            type: object
+            properties:
+              sha: { type: string }
+              url: { type: string }
+        url: { type: string }
+        html_url: { type: string }
+        comments_url: { type: string }
+
+    CommitComment:
+      type: object
+      properties:
+        id: { type: integer }
+        body: { type: string }
+        user: 
+          type: object
+          properties:
+            login: { type: string }
+            id: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateOrUpdateFileRequest:
+      type: object
+      properties:
+        message: { type: string, description: "Commit message describing the file change." }
+        content: { type: string, description: "The new file content, encoded in Base64." }
+        sha: { type: string, nullable: true, description: "SHA of the file being replaced, required for updates." }
+        branch: { type: string, nullable: true, description: "Branch name where changes should be applied. Default is the repository's default branch." }
+        committer:
+          type: object
+          nullable: true
+          properties:
+            name: { type: string }
+            email: { type: string }
+        author:
+          type: object
+          nullable: true
+          properties:
+            name: { type: string }
+            email: { type: string }
+
+    FileResponse:
+      type: object
+      properties:
+        content:
+          type: object
+          properties:
+            name: { type: string }
+            path: { type: string }
+            sha: { type: string }
+            size: { type: integer }
+            url: { type: string }
+            html_url: { type: string }
+            git_url: { type: string }
+            download_url: { type: string }
+        commit:
+          type: object
+          properties:
+            sha: { type: string }
+            url: { type: string }
+            html_url: { type: string }
+            author:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string }
+                date: { type: string, format: date-time }
+            committer:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string }
+                date: { type: string, format: date-time }
+
+
+
+
+
+
+
+
+
+
+
