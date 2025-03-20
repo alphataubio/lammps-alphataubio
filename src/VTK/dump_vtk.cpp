@@ -1783,7 +1783,8 @@ int DumpVTK::parse_fields(int narg, char **arg)
           if (argi.get_dim() > 0 && icompute->size_peratom_cols == 0)
             error->all(FLERR,"Dump vtk compute {} does not calculate per-atom array",aname);
           if (argi.get_dim() > 0 && argi.get_index1() > icompute->size_peratom_cols)
-            error->all(FLERR,"Dump vtk compute {} vector is accessed out-of-range",aname);
+            error->all(FLERR,"Dump vtk compute {} vector is accessed out-of-range{}",
+                       aname, utils::errorurl(20));
           field2index[ATTRIBUTES+iarg] = add_compute(aname);
           name[ATTRIBUTES+iarg] = arg[iarg];
         }

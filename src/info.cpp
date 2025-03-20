@@ -304,8 +304,6 @@ void Info::command(int narg, char **arg)
     fputs("-DLAMMPS_BIGBIG\n",out);
 #elif defined(LAMMPS_SMALLBIG)
     fputs("-DLAMMPS_SMALLBIG\n",out);
-#else // defined(LAMMPS_SMALLSMALL)
-    fputs("-DLAMMPS_SMALLSMALL\n",out);
 #endif
     if (has_gzip_support()) utils::print(out,"\n{}\n",platform::compress_info());
 

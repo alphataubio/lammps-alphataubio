@@ -364,7 +364,7 @@ void PairKIM::coeff(int narg, char **arg)
   if (!allocated) allocate();
 
   if (narg < 2 + atom->ntypes)
-    error->all(FLERR,"Incorrect args for pair coefficients");
+    error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
 
   // read args that map atom species to KIM elements
   // lmps_map_species_to_unique[i] =
@@ -407,7 +407,7 @@ void PairKIM::coeff(int narg, char **arg)
     }
   }
 
-  if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients");
+  if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
 
   // setup mapping between LAMMPS unique elements and KIM species codes
   if (kim_particle_codes_ok) {

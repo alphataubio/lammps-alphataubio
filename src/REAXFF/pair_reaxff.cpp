@@ -278,7 +278,7 @@ void PairReaxFF::coeff(int nargs, char **args)
   if (!allocated) allocate();
 
   if (nargs != 3 + atom->ntypes)
-    error->all(FLERR,"Incorrect args for pair coefficients");
+    error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
 
   // read ffield file
 
@@ -328,7 +328,7 @@ void PairReaxFF::coeff(int nargs, char **args)
         count++;
       }
 
-  if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients");
+  if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
 
 }
 

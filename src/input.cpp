@@ -610,7 +610,7 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
 
         while (var[i] != '\0' && var[i] != '}') i++;
 
-        if (var[i] == '\0') error->one(FLERR,"Invalid variable name");
+        if (var[i] == '\0') error->one(FLERR,"Invalid variable name {}", var);
         var[i] = '\0';
         beyond = ptr + strlen(var) + 3;
         value = variable->retrieve(var);
@@ -663,7 +663,7 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
       }
 
       if (value == nullptr)
-        error->one(FLERR,"Substitution for illegal variable {}",var);
+        error->one(FLERR,"Substitution for illegal variable {}"+utils::errorurl(13),var);
 
       // check if storage in str2 needs to be expanded
       // re-initialize ptr and ptr2 to the point beyond the variable.

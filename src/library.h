@@ -24,7 +24,7 @@
 /* We follow the behavior of regular LAMMPS compilation and assume
  * -DLAMMPS_SMALLBIG when no define is set. */
 
-#if !defined(LAMMPS_BIGBIG) && !defined(LAMMPS_SMALLBIG) && !defined(LAMMPS_SMALLSMALL)
+#if !defined(LAMMPS_BIGBIG) && !defined(LAMMPS_SMALLBIG)
 #define LAMMPS_SMALLBIG
 #endif
 

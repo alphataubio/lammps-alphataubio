@@ -377,7 +377,7 @@ void Balance::command(int narg, char **arg)
   bigint nblocal = atom->nlocal;
   MPI_Allreduce(&nblocal,&natoms,1,MPI_LMP_BIGINT,MPI_SUM,world);
   if (natoms != atom->natoms)
-    error->all(FLERR,"Lost atoms via balance: original {}  current {}",
+    error->all(FLERR,"Lost atoms via balance: original {}  current {}"+utils::errorurl(8),
                atom->natoms,natoms);
 
   // imbfinal = final imbalance

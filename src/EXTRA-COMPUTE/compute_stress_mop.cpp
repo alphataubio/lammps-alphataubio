@@ -1117,6 +1117,11 @@ void ComputeStressMop::compute_dihedrals()
         df[1] = sgn * (f1[1] + f3[1]);
         df[2] = sgn * (f1[2] + f3[2]);
       }
+
+      // no if matches
+      else {
+       df[0] = df[1] = df[2] = 0.0;
+      }
       local_contribution[0] += df[0] / area * nktv2p;
       local_contribution[1] += df[1] / area * nktv2p;
       local_contribution[2] += df[2] / area * nktv2p;

@@ -865,7 +865,7 @@ void Pair::map_element2type(int narg, char **arg, bool update_setflag)
       }
     }
 
-    if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients");
+    if (count == 0) error->all(FLERR,"Incorrect args for pair coefficients" + utils::errorurl(21));
   }
 }
 

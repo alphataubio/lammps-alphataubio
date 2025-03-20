@@ -42,7 +42,7 @@ using namespace LAMMPS_NS;
 using namespace FixConst;
 using MathSpecial::powint;
 
-enum { AUTO, UPPER, LOWER, AUTOUPPER, AUTOLOWER, FULL };
+enum { AUTO, UPPER, LOWER, AUTOUPPER, AUTOLOWER, FULL, FIRST };
 
 static const char cite_fix_ave_correlate_long[] =
     "fix ave/correlate/long command: doi:10.1063/1.3491098\n\n"
@@ -142,6 +142,8 @@ FixAveCorrelateLong::FixAveCorrelateLong(LAMMPS *lmp, int narg, char **arg) :
         type = AUTOLOWER;
       else if (strcmp(arg[iarg + 1], "full") == 0)
         type = FULL;
+      else if (strcmp(arg[iarg + 1], "first") == 0)
+        type = FIRST;
       else
         error->all(FLERR, iarg_orig + 1, "Unknown fix ave/correlate/long type: {}");
       iarg += 2;
@@ -262,7 +264,7 @@ FixAveCorrelateLong::FixAveCorrelateLong(LAMMPS *lmp, int narg, char **arg) :
 
   // npair = # of correlation pairs to calculate
 
-  if (type == AUTO) npair = nvalues;
+  if (type == AUTO || type == FIRST) npair = nvalues;
   if (type == UPPER || type == LOWER) npair = nvalues * (nvalues - 1) / 2;
   if (type == AUTOUPPER || type == AUTOLOWER) npair = nvalues * (nvalues + 1) / 2;
   if (type == FULL) npair = nvalues * nvalues;
@@ -299,6 +301,9 @@ FixAveCorrelateLong::FixAveCorrelateLong(LAMMPS *lmp, int narg, char **arg) :
         for (int i = 0; i < nvalues; i++)
           for (int j = 0; j < nvalues; j++)
             fprintf(fp," %s*%s",earg[i],earg[j]);
+      else if (type == FIRST)
+        for (int i = 0; i < nvalues; i++)
+          fprintf(fp," %s*%s",earg[0],earg[i]);
       fprintf(fp,"\n");
     }
     if (ferror(fp))
@@ -612,6 +617,8 @@ void FixAveCorrelateLong::accumulate()
         if (i == j) add(ipair++,cvalues[i]);
         else add(ipair++,cvalues[i],cvalues[j]);
       }
+  } else if (type == FIRST) {
+    for (i=0; i < nvalues; i++) add(i,cvalues[0],cvalues[i]);
   }
   last_accumulated_step = update->ntimestep;
 }

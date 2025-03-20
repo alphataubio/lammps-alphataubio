@@ -306,7 +306,7 @@ void PairDispersionD3::coeff(int narg, char **arg)
     }
   }
 
-  if (count == 0) error->all(FLERR, "Incorrect args for pair coefficients");
+  if (count == 0) error->all(FLERR, "Incorrect args for pair coefficients" + utils::errorurl(21));
 
   for (int i = 1; i <= ntypes; i++) {
     r2r4[i] = r2r4_ref[atomic_numbers[i - 1]];

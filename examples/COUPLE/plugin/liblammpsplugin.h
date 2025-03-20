@@ -24,7 +24,7 @@
  * Follow the behavior of regular LAMMPS compilation and assume
  * -DLAMMPS_SMALLBIG when no define is set.
  */
-#if !defined(LAMMPS_BIGBIG) && !defined(LAMMPS_SMALLBIG) && !defined(LAMMPS_SMALLSMALL)
+#if !defined(LAMMPS_BIGBIG) && !defined(LAMMPS_SMALLBIG)
 #define LAMMPS_SMALLBIG
 #endif
 
@@ -100,8 +100,6 @@ extern "C" {
 
 #if defined(LAMMPS_BIGBIG)
 typedef void (*FixExternalFnPtr)(void *, int64_t, int, int64_t *, double **, double **);
-#elif defined(LAMMPS_SMALLSMALL)
-typedef void (*FixExternalFnPtr)(void *, int, int, int *, double **, double **);
 #else
 typedef void (*FixExternalFnPtr)(void *, int64_t, int, int *, double **, double **);
 #endif

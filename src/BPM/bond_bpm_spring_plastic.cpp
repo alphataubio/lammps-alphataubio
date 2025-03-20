@@ -430,7 +430,7 @@ double BondBPMSpringPlastic::single(int type, double rsq, int i, int j, double &
 {
   if (type <= 0) return 0.0;
 
-  double r0, ep;
+  double r0 = 0.0, ep = 0.0;
   for (int n = 0; n < atom->num_bond[i]; n++) {
     if (atom->bond_atom[i][n] == atom->tag[j]) {
       r0 = fix_bond_history->get_atom_value(i, n, 0);
@@ -471,7 +471,7 @@ double BondBPMSpringPlastic::single(int type, double rsq, int i, int j, double &
   // set single_extra quantities
 
   svector[0] = r0;
-  svector[0] = (1.0 + ep) * r0;
+  svector[1] = (1.0 + ep) * r0;
 
   return 0.0;
 }

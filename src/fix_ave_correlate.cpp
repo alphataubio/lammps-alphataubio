@@ -36,7 +36,7 @@ using namespace LAMMPS_NS;
 using namespace FixConst;
 
 enum { ONE, RUNNING };
-enum { AUTO, UPPER, LOWER, AUTOUPPER, AUTOLOWER, FULL };
+enum { AUTO, UPPER, LOWER, AUTOUPPER, AUTOLOWER, FULL, FIRST };
 
 /* ---------------------------------------------------------------------- */
 
@@ -108,6 +108,7 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS *lmp, int narg, char **arg) :
       else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
       else if (strcmp(arg[iarg+1],"auto/lower") == 0) type = AUTOLOWER;
       else if (strcmp(arg[iarg+1],"full") == 0) type = FULL;
+      else if (strcmp(arg[iarg+1], "first") == 0) type = FIRST;
       else error->all(FLERR, iarg+1, "Unknown fix ave/correlate type: {}");
       iarg += 2;
     } else if (strcmp(arg[iarg],"ave") == 0) {
@@ -203,7 +204,7 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS *lmp, int narg, char **arg) :
 
   // npair = # of correlation pairs to calculate
 
-  if (type == AUTO) npair = nvalues;
+  if (type == AUTO || type == FIRST) npair = nvalues;
   if (type == UPPER || type == LOWER) npair = nvalues*(nvalues-1)/2;
   if (type == AUTOUPPER || type == AUTOLOWER) npair = nvalues*(nvalues+1)/2;
   if (type == FULL) npair = nvalues*nvalues;
@@ -242,6 +243,9 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS *lmp, int narg, char **arg) :
         for (int i = 0; i < nvalues; i++)
           for (int j = 0; j < nvalues; j++)
             fprintf(fp," %s*%s",earg[i],earg[j]);
+      else if (type == FIRST)
+        for (int i = 0; i < nvalues; i++)
+          fprintf(fp," %s*%s",earg[0],earg[i]);
       fprintf(fp,"\n");
     }
     if (ferror(fp))
@@ -576,6 +580,16 @@ void FixAveCorrelate::accumulate()
       for (i = 0; i < nvalues; i++)
         for (j = 0; j < nvalues; j++)
           corr[k][ipair++] += cvalues[m][i]*cvalues[n][j];
+      m--;
+      if (m < 0) m = nrepeat-1;
+    }
+  } else if (type == FIRST) {
+    m = n = lastindex;
+    for (k = 0; k < nsample; k++) {
+      ipair = 0;
+      for (i = 0; i < nvalues; i++) {
+        corr[k][ipair++] += cvalues[m][0]*cvalues[n][i];
+      }
       m--;
       if (m < 0) m = nrepeat-1;
     }
