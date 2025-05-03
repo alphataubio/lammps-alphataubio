@@ -11,239 +11,132 @@
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
-#include "fmt/format.h"
-#include "info.h"
 #include "lammps.h"
 #include "utils.h"
+#include "fmt/format.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 #include <cstdio>
-#include <fstream>
 #include <string>
-#include <cstdio>
-#include <cstring>
-#include <ctime>
 #include <mpi.h>
-#include <vector>
 
 using namespace LAMMPS_NS;
-
-static bool verbose = false;
 
 class DumpGridTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        testdata = "./test_dump_grid.txt";
-        tstamp = std::time(nullptr);
+        testbinary = "DumpGridTest_tmp.bin";
+        char *args[] = {(char *)"DumpGridTest", (char *)"-log", (char *)"none",
+                        (char *)"-echo", (char *)"screen", (char *)"-nocite"};
+
+        int argc = sizeof(args) / sizeof(char *);
+        lmp = new LAMMPS(argc, args, MPI_COMM_WORLD);
     }
 
     void TearDown() override
     {
-        if (std::remove(testdata.c_str()) != 0) {
-            // ignore error
-        }
-    }
-
-    void run_dump_grid_test(const std::string &dump_style, const std::string &filename_suffix)
-    {
-        const char *args[] = {"LAMMPS-test", "-log", "none", "-echo", "none", "-nocite"};
-        
-        char **argv = (char **)args;
-        int argc    = sizeof(args) / sizeof(char *);
-        
-        LAMMPS *lmp = new LAMMPS(argc, argv, MPI_COMM_WORLD);
-
-        std::string filename = fmt::format("test_dump_grid_{}.{}", tstamp, filename_suffix);
-
-        std::string cmds = fmt::format(
-            "region box block 0 10 0 10 0 10\n"
-            "create_box 1 box\n"
-            "create_atoms 1 single 5 5 5\n"
-            "mass 1 1.0\n"
-            "fix grid all ave/grid 1 1 1 20 20 20 vx vy vz\n"
-            "run 0\n"
-            "dump grid all {} 1 {}\n"
-            "dump_modify grid every 1\n"
-            "run 0\n",
-            dump_style, filename);
-
-        lmp->commands_string(cmds);
-
-        // check if the file was created and has content
-        FILE *fp = fopen(filename.c_str(), "r");
-        ASSERT_NE(fp, nullptr);
-        
-        // Read first few lines to verify format
-        char line[1024];
-        int line_count = 0;
-        
-        while (fgets(line, sizeof(line), fp) && line_count < 10) {
-            line_count++;
-            if (strstr(line, "ITEM:") != nullptr) {
-                // Found an ITEM header line, which is expected for dump grid
-                EXPECT_TRUE(true);
-            }
-        }
-        
-        fclose(fp);
-        
-        // Clean up
-        if (std::remove(filename.c_str()) != 0) {
-            // ignore error
-        }
-        
+        platform::unlink(testbinary);
         delete lmp;
     }
 
-    std::string testdata;
-    std::time_t tstamp;
+    void command(const std::string &cmd) { lmp->input->one(cmd); }
+
+    std::string testbinary;
+    LAMMPS *lmp;
 };
 
-TEST_F(DumpGridTest, dump_grid)
+TEST_F(DumpGridTest, dump_grid_run0)
 {
-    run_dump_grid_test("grid", "grid");
+    command("dimension 2");
+    command("create_box 1 NULL 0 5 0 5 -0.5 0.5");
+    command("create_atoms 1 single 0 0 0");
+    command("create_atoms 1 single 1 0 0");
+    command("create_atoms 1 single 0 1 0");
+    command("create_atoms 1 single 2 1 0");
+    command("create_atoms 1 single 1 2 0");
+    command("create_atoms 1 single 2 2 0");
+    command("create_atoms 1 single 3 2 0");
+    command("create_atoms 1 single 2 3 0");
+    command("create_atoms 1 single 3 3 0");
+    command("create_atoms 1 single 4 3 0");
+    command("create_atoms 1 single 3 4 0");
+    command("create_atoms 1 single 4 4 0");
+    command("create_atoms 1 single 5 4 0");
+    command("pair_style zero 3.5");
+    command("pair_coeff * *");
+    command("pair_modify shift yes");
+    command("mass * 1.0");
+    command("fix ave_grid all ave/grid 1 1 1 10 10 1 vx vy vz");
+    command("run 0 post no");
+
+    int natoms = lmp->atom->natoms;
+    ASSERT_EQ(natoms, 13);
+
+    command("write_dump all grid test_run0.grid.text fix ave_grid:grid:data");
+
+    TearDown();
+    platform::unlink("test_run0.grid.text");
+    SetUp();
+
+    command("boundary f f f");
+    command("dimension 2");
+    command("read_dump test_run0.grid.text 0 x y z box no format grid fix ave_grid:grid:data");
+    command("fix ave_grid all ave/grid 1 1 1 10 10 1 vx vy vz");
+
+    natoms = lmp->atom->natoms;
+    ASSERT_EQ(natoms, 13);
+
+    platform::unlink("test_run0.grid.text");
 }
 
-TEST_F(DumpGridTest, dump_grid_gz)
+TEST_F(DumpGridTest, run1plus1)
 {
-    if (!COMPRESS::has_gzip_support()) {
-        GTEST_SKIP() << "GZIP support not included";
-    }
-    run_dump_grid_test("grid/gz", "grid.gz");
-}
+    command("dimension 3");
+    command("create_box 1 NULL 0 2 0 2 0 2");
+    command("create_atoms 1 random 100 27632 NULL");
+    command("mass * 1.0");
+    command("pair_style lj/cut 2.5");
+    command("pair_coeff * * 1.0 1.0");
+    command("velocity all create 1.0 76287");
+    command("compute 1 all stress/atom NULL");
+    command("fix ave_grid all ave/grid 1 1 1 10 10 10 vx vy vz");
+    command("run 1 post no");
 
-TEST_F(DumpGridTest, dump_grid_zstd)
-{
-#ifdef LAMMPS_ZSTD
-    run_dump_grid_test("grid/zstd", "grid.zst");
-#else
-    GTEST_SKIP() << "ZSTD support not included";
-#endif
-}
+    command("write_dump all grid test_run1.grid.text fix ave_grid:grid:data");
 
-TEST_F(DumpGridTest, dump_grid_with_units)
-{
-    const char *args[] = {"LAMMPS-test", "-log", "none", "-echo", "none", "-nocite"};
-    
-    char **argv = (char **)args;
-    int argc    = sizeof(args) / sizeof(char *);
-    
-    LAMMPS *lmp = new LAMMPS(argc, argv, MPI_COMM_WORLD);
+    int natoms = lmp->atom->natoms;
 
-    std::string filename = fmt::format("test_dump_grid_units_{}.grid", tstamp);
+    TearDown();
+    platform::unlink("test_run1.grid.text");
+    SetUp();
 
-    std::string cmds = fmt::format(
-        "region box block 0 10 0 10 0 10\n"
-        "create_box 1 box\n"
-        "create_atoms 1 single 5 5 5\n"
-        "mass 1 1.0\n"
-        "fix grid all ave/grid 1 1 1 20 20 20 vx vy vz\n"
-        "run 0\n"
-        "dump grid all grid 1 {}\n"
-        "dump_modify grid units yes\n"
-        "run 0\n",
-        filename);
+    command("dimension 3");
+    command("read_dump test_run1.grid.text 1 grid gdim box no format grid fix ave_grid:grid:data");
+    command("fix ave_grid all ave/grid 1 1 1 10 10 10 vx vy vz");
 
-    lmp->commands_string(cmds);
+    int natoms2 = lmp->atom->natoms;
+    ASSERT_EQ(natoms, natoms2);
 
-    // check if the file was created and has content
-    FILE *fp = fopen(filename.c_str(), "r");
-    ASSERT_NE(fp, nullptr);
-    
-    // Read first few lines to verify format includes UNITS
-    char line[1024];
-    bool found_units = false;
-    
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "ITEM: UNITS") != nullptr) {
-            found_units = true;
-            break;
-        }
-    }
-    
-    EXPECT_TRUE(found_units);
-    
-    fclose(fp);
-    
-    // Clean up
-    if (std::remove(filename.c_str()) != 0) {
-        // ignore error
-    }
-    
-    delete lmp;
-}
+    // Continue from last timestep
+    command("reset_timestep 1");
+    command("mass * 1.0");
+    command("pair_style lj/cut 2.5");
+    command("pair_coeff * * 1.0 1.0");
+    command("run 1 post no");
 
-TEST_F(DumpGridTest, dump_grid_with_time)
-{
-    const char *args[] = {"LAMMPS-test", "-log", "none", "-echo", "none", "-nocite"};
-    
-    char **argv = (char **)args;
-    int argc    = sizeof(args) / sizeof(char *);
-    
-    LAMMPS *lmp = new LAMMPS(argc, argv, MPI_COMM_WORLD);
+    command("write_dump all grid test_run2.grid.text fix ave_grid:grid:data");
 
-    std::string filename = fmt::format("test_dump_grid_time_{}.grid", tstamp);
-
-    std::string cmds = fmt::format(
-        "region box block 0 10 0 10 0 10\n"
-        "create_box 1 box\n"
-        "create_atoms 1 single 5 5 5\n"
-        "mass 1 1.0\n"
-        "fix grid all ave/grid 1 1 1 20 20 20 vx vy vz\n"
-        "run 0\n"
-        "dump grid all grid 1 {}\n"
-        "dump_modify grid time yes\n"
-        "run 0\n",
-        filename);
-
-    lmp->commands_string(cmds);
-
-    // check if the file was created and has content
-    FILE *fp = fopen(filename.c_str(), "r");
-    ASSERT_NE(fp, nullptr);
-    
-    // Read first few lines to verify format includes TIME
-    char line[1024];
-    bool found_time = false;
-    
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "ITEM: TIME") != nullptr) {
-            found_time = true;
-            break;
-        }
-    }
-    
-    EXPECT_TRUE(found_time);
-    
-    fclose(fp);
-    
-    // Clean up
-    if (std::remove(filename.c_str()) != 0) {
-        // ignore error
-    }
-    
-    delete lmp;
+    platform::unlink("test_run1.grid.text");
+    platform::unlink("test_run2.grid.text");
 }
 
 int main(int argc, char **argv)
 {
     MPI_Init(&argc, &argv);
     ::testing::InitGoogleMock(&argc, argv);
-
-    // handle arguments passed via environment variable
-    if (const char *var = getenv("TEST_ARGS")) {
-        std::vector<std::string> env = LAMMPS_NS::utils::split_words(var);
-        for (auto arg : env) {
-            if (arg == "-v") {
-                verbose = true;
-            }
-        }
-    }
-
-    if ((argc > 1) && (strcmp(argv[1], "-v") == 0)) verbose = true;
 
     int rv = RUN_ALL_TESTS();
     MPI_Finalize();
