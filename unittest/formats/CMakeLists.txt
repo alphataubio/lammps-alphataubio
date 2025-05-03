@@ -60,6 +60,9 @@ if(PKG_COMPRESS AND GZIP_FOUND)
     add_executable(test_dump_cfg_compressed test_dump_cfg_compressed.cpp compressed_dump_test_main.cpp)
     target_link_libraries(test_dump_cfg_compressed PRIVATE lammps GTest::GMock)
 
+    add_executable(test_dump_grid_compressed test_dump_grid_compressed.cpp compressed_dump_test_main.cpp)
+    target_link_libraries(test_dump_grid_compressed PRIVATE lammps GTest::GMock)
+
     add_executable(test_dump_local_compressed test_dump_local_compressed.cpp compressed_dump_test_main.cpp)
     target_link_libraries(test_dump_local_compressed PRIVATE lammps GTest::GMock)
 
@@ -74,6 +77,9 @@ if(PKG_COMPRESS AND GZIP_FOUND)
 
     add_test(NAME DumpCfgGZ COMMAND test_dump_cfg_compressed gz)
     set_tests_properties(DumpCfgGZ PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR};COMPRESS_EXECUTABLE=${GZIP_EXECUTABLE}")
+
+    add_test(NAME DumpGridGZ COMMAND test_dump_grid_compressed gz)
+    set_tests_properties(DumpGridGZ PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR};COMPRESS_EXECUTABLE=${GZIP_EXECUTABLE}")
 
     add_test(NAME DumpLocalGZ COMMAND test_dump_local_compressed gz)
     set_tests_properties(DumpLocalGZ PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR};COMPRESS_EXECUTABLE=${GZIP_EXECUTABLE}")
@@ -95,6 +101,9 @@ if(PKG_COMPRESS AND GZIP_FOUND)
         add_test(NAME DumpCfgZstd COMMAND test_dump_cfg_compressed zstd)
         set_tests_properties(DumpCfgZstd PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR};COMPRESS_EXECUTABLE=${ZSTD_EXECUTABLE}")
 
+        add_test(NAME DumpGridZstd COMMAND test_dump_grid_compressed zstd)
+        set_tests_properties(DumpGridZstd PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR};COMPRESS_EXECUTABLE=${ZSTD_EXECUTABLE}")
+
         add_test(NAME DumpLocalZstd COMMAND test_dump_local_compressed zstd)
         set_tests_properties(DumpLocalZstd PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR};COMPRESS_EXECUTABLE=${ZSTD_EXECUTABLE}")
 
@@ -112,6 +121,11 @@ add_executable(test_dump_cfg test_dump_cfg.cpp)
 target_link_libraries(test_dump_cfg PRIVATE lammps GTest::GMock)
 add_test(NAME DumpCfg COMMAND test_dump_cfg)
 set_tests_properties(DumpCfg PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR}")
+
+add_executable(test_dump_grid test_dump_grid.cpp)
+target_link_libraries(test_dump_grid PRIVATE lammps GTest::GMock)
+add_test(NAME DumpGrid COMMAND test_dump_grid)
+set_tests_properties(DumpGrid PROPERTIES ENVIRONMENT "LAMMPS_POTENTIALS=${LAMMPS_POTENTIALS_DIR}")
 
 add_executable(test_dump_local test_dump_local.cpp)
 target_link_libraries(test_dump_local PRIVATE lammps GTest::GMock)
