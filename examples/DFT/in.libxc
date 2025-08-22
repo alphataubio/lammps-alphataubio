@@ -1,0 +1,65 @@
+# Example LAMMPS input script for DFT package with LibXC
+# This demonstrates the use of various DFT functionals for a simple system
+
+# Initialize simulation
+units          metal
+atom_style     atomic
+boundary       p p p
+
+# Create simulation box and atoms
+lattice        fcc 3.615  # Copper lattice
+region         box block 0 10 0 10 0 10
+create_box     2 box
+create_atoms   1 box
+
+# Set masses
+mass           1 63.546  # Cu
+mass           2 107.868 # Ag
+
+# Define DFT interaction using LibXC
+# Syntax: pair_style libxc <functional> <cutoff> [options]
+
+# Example 1: LDA functional (Perdew-Wang)
+pair_style     libxc LDA_X+LDA_C_PW 12.0 ngrid 100 spacing 0.01
+
+# Example 2: PBE functional (GGA)
+#pair_style     libxc PBE 12.0
+
+# Example 3: BLYP functional
+#pair_style     libxc BLYP 12.0
+
+# Pair coefficients
+# Syntax: pair_coeff <i> <j> <rho0> <decay_length> <atomic_volume> <cutoff>
+#   rho0: reference electron density
+#   decay_length: characteristic decay length for electron density
+#   atomic_volume: effective atomic volume
+#   cutoff: pairwise cutoff distance
+
+pair_coeff     1 1 0.15 2.5 11.8 12.0  # Cu-Cu
+pair_coeff     2 2 0.13 2.7 17.1 12.0  # Ag-Ag
+pair_coeff     1 2 0.14 2.6 14.0 12.0  # Cu-Ag
+
+# Neighbor list
+neighbor       2.0 bin
+neigh_modify   delay 5 every 1 check yes
+
+# Energy minimization
+minimize       1e-6 1e-8 1000 10000
+
+# Set up NVT simulation
+velocity       all create 300.0 4928459 dist gaussian
+fix            1 all nvt temp 300.0 300.0 0.1
+timestep       0.001
+
+# Output
+thermo         100
+thermo_style   custom step temp pe ke etotal press vol
+
+# Dump trajectory
+dump           1 all custom 100 dft_traj.lammpstrj id type x y z fx fy fz
+
+# Run simulation
+run            10000
+
+# Test different functionals by uncommenting and running again
+print          "Simulation with LibXC DFT functional complete"
