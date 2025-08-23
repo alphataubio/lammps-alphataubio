@@ -1,0 +1,56 @@
+# LAMMPS input script for methane molecule with DFT (PBE functional)
+
+# Initialize simulation
+units           real
+atom_style      full
+boundary        f f f
+
+# Create methane molecule (CH4)
+region          box block -10.0 10.0 -10.0 10.0 -10.0 10.0
+create_box      2 box
+
+# Add atoms (tetrahedral methane)
+create_atoms    2 single 0.0 0.0 0.0           # Carbon
+create_atoms    1 single 0.629 0.629 0.629     # H1
+create_atoms    1 single -0.629 -0.629 0.629   # H2
+create_atoms    1 single -0.629 0.629 -0.629   # H3
+create_atoms    1 single 0.629 -0.629 -0.629   # H4
+
+# Set masses
+mass            1 1.008   # Hydrogen
+mass            2 12.011  # Carbon
+
+# Set charges (nuclear charges)
+set             type 1 charge 1.0
+set             type 2 charge 6.0
+
+# DFT pair style with PBE functional and 6-31G** basis
+# PBE is a standard GGA functional
+pair_style      dft PBE 631gss.C_H.json grid 50000 tol 1e-7
+
+# Pair coefficients: atom_type atom_type nuclear_charge vdw_radius
+pair_coeff      1 1 1.0 1.20   # H-H
+pair_coeff      1 2 1.0 1.20   # H-C (H parameters)
+pair_coeff      2 2 6.0 1.70   # C-C
+
+# Neighbor list
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# Output
+thermo_style    custom step pe ke etotal temp press
+thermo          1
+
+# Dump trajectory
+dump            1 all xyz 1 methane_pbe.xyz
+dump_modify     1 element H C
+
+# Energy minimization
+minimize        1.0e-10 1.0e-12 1000 10000
+
+# Print final geometry
+write_data      methane_optimized.data
+
+# Single point energy with higher accuracy
+pair_style      dft PBE 631gss.C_H.json grid 100000 tol 1e-9
+run             0
