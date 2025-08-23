@@ -1,7 +1,10 @@
-# LibXC library support for DFT package
+# DFT package for LAMMPS
+# Requires: LibXC, libint2, Eigen3, nlohmann_json
+
+# Find required packages
 find_package(PkgConfig QUIET)
 
-# First try to find an existing libxc installation
+# ===== LibXC Configuration =====
 set(LIBXC_FOUND FALSE)
 if(PKG_CONFIG_FOUND)
   pkg_check_modules(LIBXC QUIET libxc>=5.0.0)
@@ -27,32 +30,25 @@ if(NOT LIBXC_FOUND)
   endif()
 endif()
 
-# If libxc is not found, download and build it
+# Download and build LibXC if not found
 if(NOT LIBXC_FOUND)
   message(STATUS "LibXC not found in system. Will download and build LibXC automatically.")
   
-  # Set policy to silence warnings about timestamps of downloaded files
   if(POLICY CMP0135)
     cmake_policy(SET CMP0135 OLD)
   endif()
   
-  # LibXC download configuration
-  # Using LibXC 6.2.2 which has good CMake support
   set(LIBXC_URL "https://gitlab.com/libxc/libxc/-/archive/6.2.2/libxc-6.2.2.tar.gz" CACHE STRING "URL for LibXC library sources")
   set(LIBXC_MD5 "6c866168040a0c49879c8963ec4a2fb7" CACHE STRING "MD5 checksum of LibXC library tarball")
   mark_as_advanced(LIBXC_URL)
   mark_as_advanced(LIBXC_MD5)
   
-  # Get fallback URL for backup download location
   GetFallbackURL(LIBXC_URL LIBXC_FALLBACK)
   
-  # Option for using a local LibXC directory (useful for development)
-  # Use LOCAL_DFT to be consistent with other packages like LOCAL_ML-PACE
-  if(LOCAL_DFT)
-    set(libxc_source_dir "${LOCAL_DFT}")
+  if(LOCAL_DFT_LIBXC)
+    set(libxc_source_dir "${LOCAL_DFT_LIBXC}")
     message(STATUS "Using local LibXC directory: ${libxc_source_dir}")
   else()
-    # Download LibXC if not already present or if checksum doesn't match
     if(EXISTS ${CMAKE_BINARY_DIR}/libxc.tar.gz)
       file(MD5 ${CMAKE_BINARY_DIR}/libxc.tar.gz DL_MD5)
     endif()
@@ -73,7 +69,6 @@ if(NOT LIBXC_FOUND)
       message(STATUS "Using already downloaded LibXC archive ${CMAKE_BINARY_DIR}/libxc.tar.gz")
     endif()
     
-    # Extract LibXC sources
     message(STATUS "Extracting LibXC sources...")
     execute_process(
       COMMAND ${CMAKE_COMMAND} -E remove_directory libxc-*
@@ -81,32 +76,23 @@ if(NOT LIBXC_FOUND)
       WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     )
     
-    # Find the extracted directory
     get_newest_file(${CMAKE_BINARY_DIR}/libxc-* libxc_source_dir)
   endif()
   
-  # LibXC 6.x includes CMake support, so we can use add_subdirectory
-  # Check if CMakeLists.txt exists in the source directory
+  # Build LibXC with CMake
   if(EXISTS ${libxc_source_dir}/CMakeLists.txt)
-    # Configure LibXC build options
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static LibXC library" FORCE)
     set(ENABLE_FORTRAN OFF CACHE BOOL "Disable Fortran interface" FORCE)
     set(ENABLE_CUDA OFF CACHE BOOL "Disable CUDA support" FORCE)
     set(BUILD_TESTING OFF CACHE BOOL "Disable LibXC tests" FORCE)
     
-    # Add LibXC as a subdirectory
     add_subdirectory(${libxc_source_dir} build-libxc EXCLUDE_FROM_ALL)
     
-    # Link LAMMPS with the built LibXC
     target_link_libraries(lammps PRIVATE xc)
-    
-    # Get the include directory from the LibXC target
     get_target_property(LIBXC_INCLUDE_DIRS xc INTERFACE_INCLUDE_DIRECTORIES)
     if(LIBXC_INCLUDE_DIRS)
       target_include_directories(lammps PRIVATE ${LIBXC_INCLUDE_DIRS})
     endif()
-    
-    # Also add the source directory for generated headers
     target_include_directories(lammps PRIVATE ${CMAKE_BINARY_DIR}/build-libxc)
     target_include_directories(lammps PRIVATE ${libxc_source_dir}/src)
     
@@ -114,50 +100,8 @@ if(NOT LIBXC_FOUND)
     
     message(STATUS "LibXC will be built automatically from ${libxc_source_dir}")
   else()
-    # Fallback for older LibXC versions without CMake support
-    # Use ExternalProject to handle autotools build
-    include(ExternalProject)
-    
-    set(LIBXC_INSTALL_PREFIX ${CMAKE_BINARY_DIR}/libxc_install)
-    
-    # Configure command for autotools
-    set(LIBXC_CONFIGURE_CMD ${libxc_source_dir}/configure 
-        --prefix=${LIBXC_INSTALL_PREFIX}
-        --disable-shared
-        --enable-static
-        --disable-fortran
-        CC=${CMAKE_C_COMPILER}
-        CXX=${CMAKE_CXX_COMPILER}
-    )
-    
-    ExternalProject_Add(
-      libxc_build
-      SOURCE_DIR ${libxc_source_dir}
-      CONFIGURE_COMMAND ${LIBXC_CONFIGURE_CMD}
-      BUILD_COMMAND make -j
-      INSTALL_COMMAND make install
-      BUILD_IN_SOURCE 1
-      BUILD_BYPRODUCTS ${LIBXC_INSTALL_PREFIX}/lib/libxc.a
-    )
-    
-    # Create imported target for LibXC
-    add_library(libxc_imported STATIC IMPORTED GLOBAL)
-    set_target_properties(libxc_imported PROPERTIES
-      IMPORTED_LOCATION ${LIBXC_INSTALL_PREFIX}/lib/libxc.a
-    )
-    
-    # Make sure LibXC is built before LAMMPS
-    add_dependencies(lammps libxc_build)
-    
-    # Link LAMMPS with the built LibXC
-    target_link_libraries(lammps PRIVATE libxc_imported)
-    target_include_directories(lammps PRIVATE ${LIBXC_INSTALL_PREFIX}/include)
-    target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBXC)
-    
-    message(STATUS "LibXC (autotools version) will be built automatically from ${libxc_source_dir}")
-    message(STATUS "LibXC will be installed to ${LIBXC_INSTALL_PREFIX}")
+    message(FATAL_ERROR "LibXC source directory does not contain CMakeLists.txt")
   endif()
-  
 else()
   # Use system LibXC
   target_include_directories(lammps PRIVATE ${LIBXC_INCLUDE_DIRS})
@@ -167,22 +111,238 @@ else()
   message(STATUS "Found LibXC:")
   message(STATUS "  Include directories: ${LIBXC_INCLUDE_DIRS}")
   message(STATUS "  Libraries: ${LIBXC_LIBRARIES}")
+endif()
+
+# ===== libint2 Configuration =====
+set(LIBINT2_FOUND FALSE)
+
+# First try to find libint2 using its CMake config
+find_package(Libint2 QUIET CONFIG)
+
+if(NOT Libint2_FOUND)
+  # Try pkg-config
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(LIBINT2 QUIET libint2>=2.6.0)
+  endif()
   
-  # Check LibXC version if available
-  if(LIBXC_VERSION)
-    message(STATUS "  Version: ${LIBXC_VERSION}")
-    if(LIBXC_VERSION VERSION_LESS "5.0.0")
-      message(WARNING "LibXC version ${LIBXC_VERSION} is older than recommended (5.0.0). Some features may not be available.")
+  if(NOT LIBINT2_FOUND)
+    # Manual search
+    find_path(LIBINT2_INCLUDE_DIR
+      NAMES libint2.hpp
+      PATHS /usr/include /usr/local/include /opt/local/include
+      PATH_SUFFIXES libint2
+    )
+    
+    find_library(LIBINT2_LIBRARY
+      NAMES int2 libint2
+      PATHS /usr/lib /usr/local/lib /opt/local/lib /usr/lib64 /usr/local/lib64
+    )
+    
+    if(LIBINT2_INCLUDE_DIR AND LIBINT2_LIBRARY)
+      set(LIBINT2_FOUND TRUE)
+      set(LIBINT2_INCLUDE_DIRS ${LIBINT2_INCLUDE_DIR})
+      set(LIBINT2_LIBRARIES ${LIBINT2_LIBRARY})
     endif()
   endif()
 endif()
 
-# Optional: Enable OpenMP for LibXC if available
-if(BUILD_OMP)
-  target_compile_definitions(lammps PRIVATE -DLIBXC_OPENMP)
+# Download and build libint2 if not found
+if(NOT LIBINT2_FOUND AND NOT Libint2_FOUND)
+  message(STATUS "libint2 not found in system. Will download and build libint2 automatically.")
+  
+  set(LIBINT2_URL "https://github.com/evaleev/libint/releases/download/v2.7.2/libint-2.7.2.tgz" CACHE STRING "URL for libint2 library sources")
+  set(LIBINT2_MD5 "37f9e2a0f4e0c22e0e3e6f2b5e2f5b8f" CACHE STRING "MD5 checksum of libint2 library tarball")
+  mark_as_advanced(LIBINT2_URL)
+  mark_as_advanced(LIBINT2_MD5)
+  
+  GetFallbackURL(LIBINT2_URL LIBINT2_FALLBACK)
+  
+  if(LOCAL_DFT_LIBINT2)
+    set(libint2_source_dir "${LOCAL_DFT_LIBINT2}")
+    message(STATUS "Using local libint2 directory: ${libint2_source_dir}")
+  else()
+    if(EXISTS ${CMAKE_BINARY_DIR}/libint2.tar.gz)
+      file(MD5 ${CMAKE_BINARY_DIR}/libint2.tar.gz DL_MD5)
+    endif()
+    
+    if(NOT "${DL_MD5}" STREQUAL "${LIBINT2_MD5}")
+      message(STATUS "Downloading ${LIBINT2_URL}")
+      file(DOWNLOAD ${LIBINT2_URL} ${CMAKE_BINARY_DIR}/libint2.tar.gz STATUS DL_STATUS SHOW_PROGRESS)
+      file(MD5 ${CMAKE_BINARY_DIR}/libint2.tar.gz DL_MD5)
+      if(NOT DL_STATUS EQUAL 0)
+        if(LIBINT2_FALLBACK)
+          message(WARNING "Download from primary URL ${LIBINT2_URL} failed\nTrying fallback URL ${LIBINT2_FALLBACK}")
+          file(DOWNLOAD ${LIBINT2_FALLBACK} ${CMAKE_BINARY_DIR}/libint2.tar.gz SHOW_PROGRESS)
+        else()
+          message(FATAL_ERROR "Failed to download libint2 from ${LIBINT2_URL}")
+        endif()
+      endif()
+    else()
+      message(STATUS "Using already downloaded libint2 archive ${CMAKE_BINARY_DIR}/libint2.tar.gz")
+    endif()
+    
+    message(STATUS "Extracting libint2 sources...")
+    execute_process(
+      COMMAND ${CMAKE_COMMAND} -E remove_directory libint-*
+      COMMAND ${CMAKE_COMMAND} -E tar xzf libint2.tar.gz
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    
+    get_newest_file(${CMAKE_BINARY_DIR}/libint-* libint2_source_dir)
+  endif()
+  
+  # Build libint2 with CMake
+  if(EXISTS ${libint2_source_dir}/CMakeLists.txt)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libint2 library" FORCE)
+    set(LIBINT2_BUILD_SHARED OFF CACHE BOOL "Build static libint2" FORCE)
+    set(ENABLE_FORTRAN OFF CACHE BOOL "Disable Fortran interface" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "Disable libint2 tests" FORCE)
+    
+    # Configure libint2 for standard integrals
+    set(LIBINT2_SHGAUSS_ORDERING "standard" CACHE STRING "Use standard shell ordering" FORCE)
+    set(WITH_MAX_AM 4 CACHE STRING "Maximum angular momentum" FORCE)
+    set(WITH_OPT_AM 3 CACHE STRING "Optimized angular momentum" FORCE)
+    
+    add_subdirectory(${libint2_source_dir} build-libint2 EXCLUDE_FROM_ALL)
+    
+    target_link_libraries(lammps PRIVATE libint2)
+    target_include_directories(lammps PRIVATE ${libint2_source_dir}/include)
+    target_include_directories(lammps PRIVATE ${CMAKE_BINARY_DIR}/build-libint2/include)
+    
+    target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBINT2)
+    
+    message(STATUS "libint2 will be built automatically from ${libint2_source_dir}")
+  else()
+    message(WARNING "libint2 source directory does not contain CMakeLists.txt. DFT integrals will be limited.")
+    set(LIBINT2_FOUND FALSE)
+  endif()
+else()
+  if(Libint2_FOUND)
+    # Use CMake config
+    target_link_libraries(lammps PRIVATE Libint2::libint2)
+    target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBINT2)
+    message(STATUS "Found libint2 via CMake config")
+  else()
+    # Use system libint2
+    target_include_directories(lammps PRIVATE ${LIBINT2_INCLUDE_DIRS})
+    target_link_libraries(lammps PRIVATE ${LIBINT2_LIBRARIES})
+    target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBINT2)
+    
+    message(STATUS "Found libint2:")
+    message(STATUS "  Include directories: ${LIBINT2_INCLUDE_DIRS}")
+    message(STATUS "  Libraries: ${LIBINT2_LIBRARIES}")
+  endif()
 endif()
 
-# Optional: Enable MPI for LibXC if available
-if(BUILD_MPI)
-  target_compile_definitions(lammps PRIVATE -DLIBXC_MPI)
+# ===== Eigen3 Configuration =====
+find_package(Eigen3 3.3 QUIET NO_MODULE)
+
+if(NOT Eigen3_FOUND)
+  # Try to find Eigen3 manually
+  find_path(EIGEN3_INCLUDE_DIR
+    NAMES Eigen/Core
+    PATHS /usr/include /usr/local/include /opt/local/include
+    PATH_SUFFIXES eigen3
+  )
+  
+  if(EIGEN3_INCLUDE_DIR)
+    set(Eigen3_FOUND TRUE)
+    message(STATUS "Found Eigen3: ${EIGEN3_INCLUDE_DIR}")
+    target_include_directories(lammps PRIVATE ${EIGEN3_INCLUDE_DIR})
+  else()
+    # Download Eigen3 headers
+    message(STATUS "Eigen3 not found. Will download Eigen3 headers.")
+    
+    set(EIGEN3_URL "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz" CACHE STRING "URL for Eigen3 headers")
+    set(EIGEN3_MD5 "4c527a9171d71a72a9d4186e65bea559" CACHE STRING "MD5 checksum of Eigen3 tarball")
+    
+    if(EXISTS ${CMAKE_BINARY_DIR}/eigen3.tar.gz)
+      file(MD5 ${CMAKE_BINARY_DIR}/eigen3.tar.gz DL_MD5)
+    endif()
+    
+    if(NOT "${DL_MD5}" STREQUAL "${EIGEN3_MD5}")
+      message(STATUS "Downloading ${EIGEN3_URL}")
+      file(DOWNLOAD ${EIGEN3_URL} ${CMAKE_BINARY_DIR}/eigen3.tar.gz EXPECTED_HASH MD5=${EIGEN3_MD5} SHOW_PROGRESS)
+    endif()
+    
+    message(STATUS "Extracting Eigen3 headers...")
+    execute_process(
+      COMMAND ${CMAKE_COMMAND} -E remove_directory eigen-*
+      COMMAND ${CMAKE_COMMAND} -E tar xzf eigen3.tar.gz
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    
+    get_newest_file(${CMAKE_BINARY_DIR}/eigen-* eigen3_source_dir)
+    target_include_directories(lammps PRIVATE ${eigen3_source_dir})
+    message(STATUS "Using Eigen3 from ${eigen3_source_dir}")
+  endif()
+else()
+  target_link_libraries(lammps PRIVATE Eigen3::Eigen)
+  message(STATUS "Found Eigen3 via CMake config")
 endif()
+
+# ===== Optional: BLAS/LAPACK for better performance =====
+find_package(BLAS QUIET)
+find_package(LAPACK QUIET)
+
+if(BLAS_FOUND AND LAPACK_FOUND)
+  target_link_libraries(lammps PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+  target_compile_definitions(lammps PRIVATE -DEIGEN_USE_BLAS -DEIGEN_USE_LAPACK)
+  message(STATUS "Using BLAS/LAPACK for linear algebra")
+endif()
+
+# ===== Optional: OpenMP for parallelization =====
+if(BUILD_OMP)
+  find_package(OpenMP QUIET)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(lammps PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(lammps PRIVATE -DDFT_USE_OPENMP)
+    message(STATUS "DFT package will use OpenMP for parallelization")
+  endif()
+endif()
+
+# ===== Optional: MPI for parallel DFT =====
+if(BUILD_MPI)
+  target_compile_definitions(lammps PRIVATE -DDFT_USE_MPI)
+  message(STATUS "DFT package will use MPI for parallel calculations")
+endif()
+
+# ===== Configure DFT package compilation flags =====
+target_compile_definitions(lammps PRIVATE -DLAMMPS_DFT)
+
+# Enable C++14 or higher for modern features
+target_compile_features(lammps PRIVATE cxx_std_14)
+
+# Add warning flags for development
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(lammps PRIVATE 
+    $<$<CONFIG:Debug>:-Wall -Wextra -Wpedantic>
+  )
+endif()
+
+# Summary message
+message(STATUS "================================================")
+message(STATUS "DFT Package Configuration Summary:")
+message(STATUS "  LibXC: ${LIBXC_FOUND}")
+if(LIBINT2_FOUND OR Libint2_FOUND)
+  message(STATUS "  libint2: Found")
+else()
+  message(STATUS "  libint2: Not found (limited integral support)")
+endif()
+message(STATUS "  Eigen3: ${Eigen3_FOUND}")
+if(BLAS_FOUND AND LAPACK_FOUND)
+  message(STATUS "  BLAS/LAPACK: Enabled")
+else()
+  message(STATUS "  BLAS/LAPACK: Disabled")
+endif()
+if(BUILD_OMP AND OpenMP_CXX_FOUND)
+  message(STATUS "  OpenMP: Enabled")
+else()
+  message(STATUS "  OpenMP: Disabled")
+endif()
+if(BUILD_MPI)
+  message(STATUS "  MPI: Enabled")
+else()
+  message(STATUS "  MPI: Disabled")
+endif()
+message(STATUS "================================================")
