@@ -20,6 +20,9 @@ endif()
 if(POLICY CMP0169)
   cmake_policy(SET CMP0169 OLD)  # Allow deprecated FetchContent_Populate if needed
 endif()
+if(POLICY CMP0148)
+  cmake_policy(SET CMP0148 OLD)  # Keep FindPythonInterp for older dependencies
+endif()
 
 # ---------------- System checks ----------------
 find_package(PkgConfig QUIET)
