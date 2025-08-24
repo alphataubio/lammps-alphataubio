@@ -1,72 +1,25 @@
-# DFT package bootstrap for LAMMPS
+# DFT package bootstrap for LAMMPS using FetchContent
 # - Finds system installs first
-# - Otherwise downloads sources to deterministic tarball names
-# - Extracts into staging dirs (never confuses .tar.gz with folders)
+# - Otherwise uses FetchContent to download and build dependencies
 # - Installs Eigen3 locally to provide Eigen3Config.cmake for libint2
-# - Builds LibXC (6.2.2) and libint2 (2.7.2) via add_subdirectory
+# - Builds LibXC (6.2.2) and libint2 (2.7.2) via FetchContent
 # - Avoids cache collisions by using DFT_* variables
 
-function(download_with_fallback url outpath expected_md5)
-  message(STATUS "[download] ${url}")
-  file(DOWNLOAD "${url}" "${outpath}" STATUS _st SHOW_PROGRESS TLS_VERIFY ON)
-  list(GET _st 0 _code)
-  if(NOT _code EQUAL 0)
-    find_program(CURL_EXE curl)
-    if(CURL_EXE)
-      execute_process(COMMAND "${CURL_EXE}" -L --fail --retry 3 -o "${outpath}" "${url}"
-                      RESULT_VARIABLE _curl_rc)
-      if(NOT _curl_rc EQUAL 0)
-        message(WARNING "[download] curl failed rc=${_curl_rc}")
-      endif()
-    endif()
-    if(NOT EXISTS "${outpath}")
-      find_program(WGET_EXE wget)
-      if(WGET_EXE)
-        execute_process(COMMAND "${WGET_EXE}" -O "${outpath}" "${url}"
-                        RESULT_VARIABLE _wget_rc)
-        if(NOT _wget_rc EQUAL 0)
-          message(WARNING "[download] wget failed rc=${_wget_rc}")
-        endif()
-      endif()
-    endif()
-  endif()
-  if(NOT EXISTS "${outpath}")
-    message(FATAL_ERROR "[download] Failed to download ${url}")
-  endif()
-  if(NOT "${expected_md5}" STREQUAL "")
-    file(MD5 "${outpath}" _md5)
-    if(NOT "${_md5}" STREQUAL "${expected_md5}")
-      message(FATAL_ERROR "MD5 mismatch for ${outpath}: got ${_md5}, expected ${expected_md5}")
-    endif()
-  endif()
-endfunction()
+include(FetchContent)
 
-function(download_and_extract name url tarball stage_dir expected_md5 OUT_VAR)
-  if(EXISTS "${tarball}")
-    file(MD5 "${tarball}" _dl_md5)
-  endif()
-  if("${expected_md5}" STREQUAL "" OR NOT "${_dl_md5}" STREQUAL "${expected_md5}")
-    download_with_fallback("${url}" "${tarball}" "${expected_md5}")
-  else()
-    message(STATUS "[${name}] Using cached tarball ${tarball}")
-  endif()
-  file(REMOVE_RECURSE "${stage_dir}")
-  file(MAKE_DIRECTORY "${stage_dir}")
-  message(STATUS "[${name}] Extracting into ${stage_dir}")
-  execute_process(COMMAND ${CMAKE_COMMAND} -E tar xzf "${tarball}"
-                  WORKING_DIRECTORY "${stage_dir}" RESULT_VARIABLE _xrc)
-  if(NOT _xrc EQUAL 0)
-    message(FATAL_ERROR "[${name}] Extraction failed rc=${_xrc}")
-  endif()
-  file(GLOB _dirs "${stage_dir}/*")
-  foreach(d IN LISTS _dirs)
-    if(IS_DIRECTORY "${d}")
-      set(${OUT_VAR} "${d}" PARENT_SCOPE)
-      return()
-    endif()
-  endforeach()
-  message(FATAL_ERROR "[${name}] No extracted directory found")
-endfunction()
+# Set FetchContent to be quiet by default
+set(FETCHCONTENT_QUIET ON)
+
+# Set CMake policies to avoid warnings with external dependencies
+if(POLICY CMP0077)
+  cmake_policy(SET CMP0077 NEW)  # option() honors normal variables
+endif()
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 OLD)  # Keep FindBoost module for older dependencies
+endif()
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)  # Allow deprecated FetchContent_Populate if needed
+endif()
 
 # ---------------- System checks ----------------
 find_package(PkgConfig QUIET)
@@ -100,101 +53,105 @@ endif()
 
 find_package(Eigen3 QUIET)
 
-
-# ---------------- Eigen3 vendoring ----------------
+# ---------------- Eigen3 vendoring via FetchContent ----------------
 if(NOT Eigen3_FOUND)
-  set(DFT_EIGEN_URL "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz")
-  set(DFT_EIGEN_MD5 "4c527a9171d71a72a9d4186e65bea559")
-  set(_eigen_tar   "${CMAKE_BINARY_DIR}/eigen-3.4.0.tar.gz")
-  set(_eigen_stage "${CMAKE_BINARY_DIR}/_eigen_src")
-  download_and_extract("Eigen3" "${DFT_EIGEN_URL}" "${_eigen_tar}" "${_eigen_stage}" "${DFT_EIGEN_MD5}" _e_srcdir)
+  message(STATUS "[DFT] Fetching Eigen3...")
   
-  set(EIGEN_PREFIX "${CMAKE_BINARY_DIR}/_eigen_install")
-  file(REMOVE_RECURSE "${EIGEN_PREFIX}")  # Clean previous install
+  # Configure Eigen3 build options before fetching
+  set(BUILD_TESTING OFF CACHE BOOL "Disable Eigen3 testing" FORCE)
+  set(EIGEN_BUILD_DOC OFF CACHE BOOL "Disable Eigen3 documentation" FORCE)
+  set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "Disable Eigen3 pkgconfig" FORCE)
   
-  execute_process(
-    COMMAND ${CMAKE_COMMAND} -S "${_e_srcdir}" -B "${CMAKE_BINARY_DIR}/build-eigen"
-      -DCMAKE_INSTALL_PREFIX="${EIGEN_PREFIX}"
-      -DBUILD_TESTING=OFF
-      -DEIGEN_BUILD_DOC=OFF
-    RESULT_VARIABLE _rc
+  FetchContent_Declare(
+    dft_eigen3
+    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+    URL_HASH MD5=4c527a9171d71a72a9d4186e65bea559
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
   )
-  if(NOT _rc EQUAL 0)
-    message(FATAL_ERROR "Failed to configure Eigen3")
-  endif()
   
-  execute_process(
-    COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}/build-eigen" --target install
-    RESULT_VARIABLE _rc
-  )
-  if(NOT _rc EQUAL 0)
-    message(FATAL_ERROR "Failed to install Eigen3")
-  endif()
+  # Use modern FetchContent approach
+  FetchContent_MakeAvailable(dft_eigen3)
   
-  # Set these BEFORE including libint2
-  set(Eigen3_DIR "${EIGEN_PREFIX}/share/eigen3/cmake" CACHE PATH "" FORCE)
-  set(EIGEN3_INCLUDE_DIR "${EIGEN_PREFIX}/include/eigen3" CACHE PATH "" FORCE)
-  set(EIGEN3_ROOT_DIR "${EIGEN_PREFIX}" CACHE PATH "" FORCE)
+  # Set up Eigen3 paths for libint2 compatibility
+  set(EIGEN3_INCLUDE_DIR "${dft_eigen3_SOURCE_DIR}" CACHE PATH "Eigen3 include directory" FORCE)
+  set(EIGEN3_ROOT_DIR "${dft_eigen3_SOURCE_DIR}" CACHE PATH "Eigen3 root directory" FORCE)
+  set(Eigen3_FOUND TRUE CACHE BOOL "Eigen3 found flag" FORCE)
   
-  # Create an Eigen3::Eigen target if it doesn't exist
+  # Add the Eigen3 alias target if it doesn't exist
   if(NOT TARGET Eigen3::Eigen)
     add_library(Eigen3::Eigen INTERFACE IMPORTED)
     set_target_properties(Eigen3::Eigen PROPERTIES
-      INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}"
+      INTERFACE_INCLUDE_DIRECTORIES "${dft_eigen3_SOURCE_DIR}"
     )
   endif()
   
-  # Mark Eigen3 as found
-  set(Eigen3_FOUND TRUE CACHE BOOL "" FORCE)
+  message(STATUS "[DFT] Eigen3 configured from source: ${dft_eigen3_SOURCE_DIR}")
   
-  target_include_directories(lammps PRIVATE "${EIGEN3_INCLUDE_DIR}")
+  # Add include directory to lammps target
+  target_include_directories(lammps PRIVATE "${dft_eigen3_SOURCE_DIR}")
 endif()
 
-# ---------------- libint2 vendoring ----------------
+# ---------------- libint2 vendoring via FetchContent ----------------
 if(NOT LIBINT2_FOUND AND NOT Libint2_FOUND)
-  set(DFT_LIBINT2_URL "https://github.com/evaleev/libint/releases/download/v2.7.2/libint-2.7.2.tgz")
-  set(DFT_LIBINT2_MD5 "")
-  set(_libint_tar   "${CMAKE_BINARY_DIR}/libint-2.7.2.tgz")
-  set(_libint_stage "${CMAKE_BINARY_DIR}/_libint2_src")
-  download_and_extract("libint2" "${DFT_LIBINT2_URL}" "${_libint_tar}" "${_libint_stage}" "${DFT_LIBINT2_MD5}" libint2_source_dir)
+  message(STATUS "[DFT] Fetching libint2...")
   
-  # CRITICAL: Set these BEFORE add_subdirectory to prevent libint2 from finding the wrong Eigen
-  set(EIGEN3_INCLUDE_DIR "${EIGEN_PREFIX}/include/eigen3" CACHE PATH "" FORCE)
-  set(EIGEN3_ROOT_DIR "${EIGEN_PREFIX}" CACHE PATH "" FORCE)
-  set(Eigen3_DIR "${EIGEN_PREFIX}/share/eigen3/cmake" CACHE PATH "" FORCE)
-  set(Eigen3_FOUND TRUE CACHE BOOL "" FORCE)
+  # Set libint2 build options before fetching
+  set(REQUIRE_EIGEN FALSE)
+  set(LIBINT2_REQUIRE_EIGEN FALSE)
   
-  # Disable libint2's own Eigen detection
-  set(REQUIRE_EIGEN FALSE CACHE BOOL "" FORCE)
-  set(LIBINT2_REQUIRE_EIGEN FALSE CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    dft_libint2
+    URL https://github.com/evaleev/libint/releases/download/v2.7.2/libint-2.7.2.tgz
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+  )
   
-  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
-  set(CMAKE_POLICY_VERSION "3.5...${CMAKE_VERSION}")
-  
-  add_subdirectory(${libint2_source_dir} ${CMAKE_BINARY_DIR}/build-libint2)
+  # Use modern FetchContent approach
+  FetchContent_MakeAvailable(dft_libint2)
   
   target_link_libraries(lammps PRIVATE libint2)
-  target_include_directories(lammps PRIVATE ${libint2_source_dir}/include ${CMAKE_BINARY_DIR}/build-libint2/include)
+  target_include_directories(lammps PRIVATE 
+    ${dft_libint2_SOURCE_DIR}/include 
+    ${dft_libint2_BINARY_DIR}/include
+  )
   target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBINT2)
+  
+  message(STATUS "[DFT] libint2 configured")
 endif()
 
-# ---------------- LibXC vendoring ----------------
+# ---------------- LibXC vendoring via FetchContent ----------------
 if(NOT LIBXC_FOUND)
-  set(DFT_LIBXC_URL "https://gitlab.com/libxc/libxc/-/archive/6.2.2/libxc-6.2.2.tar.gz")
-  set(DFT_LIBXC_MD5 "d96888788fda9864d17271049a6fa06d")
-  set(_libxc_tar   "${CMAKE_BINARY_DIR}/libxc-6.2.2.tar.gz")
-  set(_libxc_stage "${CMAKE_BINARY_DIR}/_libxc_src")
-  download_and_extract("LibXC" "${DFT_LIBXC_URL}" "${_libxc_tar}" "${_libxc_stage}" "${DFT_LIBXC_MD5}" libxc_source_dir)
-  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
-  set(CMAKE_POLICY_VERSION "3.5...${CMAKE_VERSION}")
-  add_subdirectory(${libxc_source_dir} ${CMAKE_BINARY_DIR}/build-libxc)
+  message(STATUS "[DFT] Fetching LibXC...")
+  
+  # Set LibXC build options before fetching
+  set(DISABLE_KXC ON CACHE BOOL "Disable LibXC KXC functionals" FORCE)
+  set(DISABLE_LXC ON CACHE BOOL "Disable LibXC LXC functionals" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static LibXC" FORCE)
+  
+  FetchContent_Declare(
+    dft_libxc
+    URL https://gitlab.com/libxc/libxc/-/archive/6.2.2/libxc-6.2.2.tar.gz
+    URL_HASH MD5=d96888788fda9864d17271049a6fa06d
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Patching LibXC CMakeLists.txt..." &&
+                  sed -i.bak "s/cmake_minimum_required(VERSION [0-9.]*/cmake_minimum_required(VERSION 3.5/" <SOURCE_DIR>/CMakeLists.txt || true
+  )
+  
+  # Use modern FetchContent approach
+  FetchContent_MakeAvailable(dft_libxc)
+  
   target_link_libraries(lammps PRIVATE xc)
-  target_include_directories(lammps PRIVATE ${libxc_source_dir}/src ${CMAKE_BINARY_DIR}/build-libxc)
+  target_include_directories(lammps PRIVATE 
+    ${dft_libxc_SOURCE_DIR}/src 
+    ${dft_libxc_BINARY_DIR}
+  )
   target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBXC)
+  
+  message(STATUS "[DFT] LibXC configured")
 else()
   target_include_directories(lammps PRIVATE ${LIBXC_INCLUDE_DIRS})
   target_link_libraries(lammps PRIVATE ${LIBXC_LIBRARIES})
   target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBXC)
+  message(STATUS "[DFT] Using system LibXC")
 endif()
 
 # ---------------- Optional BLAS/LAPACK ----------------
@@ -202,6 +159,7 @@ find_package(BLAS QUIET)
 find_package(LAPACK QUIET)
 if(BLAS_FOUND AND LAPACK_FOUND)
   target_link_libraries(lammps PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+  message(STATUS "[DFT] BLAS/LAPACK found")
 endif()
 
 # ---------------- Optional OpenMP/MPI ----------------
@@ -210,14 +168,17 @@ if(BUILD_OMP)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(lammps PRIVATE OpenMP::OpenMP_CXX)
     target_compile_definitions(lammps PRIVATE -DDFT_USE_OPENMP)
+    message(STATUS "[DFT] OpenMP support enabled")
   endif()
 endif()
+
 if(BUILD_MPI)
   find_package(MPI QUIET)
   if(MPI_CXX_FOUND)
     target_include_directories(lammps PRIVATE ${MPI_CXX_INCLUDE_DIRS})
     target_link_libraries(lammps PRIVATE ${MPI_CXX_LIBRARIES})
     target_compile_definitions(lammps PRIVATE -DDFT_USE_MPI)
+    message(STATUS "[DFT] MPI support enabled")
   endif()
 endif()
 
@@ -225,5 +186,15 @@ message(STATUS "================ DFT dependency summary ================")
 message(STATUS "  LibXC_FOUND   = ${LIBXC_FOUND}")
 message(STATUS "  Libint2_FOUND = ${LIBINT2_FOUND}")
 message(STATUS "  Eigen3_FOUND  = ${Eigen3_FOUND}")
+if(BLAS_FOUND AND LAPACK_FOUND)
+  message(STATUS "  BLAS/LAPACK   = Found")
+else()
+  message(STATUS "  BLAS/LAPACK   = Not found")
+endif()
+if(BUILD_OMP AND OpenMP_CXX_FOUND)
+  message(STATUS "  OpenMP        = Enabled")
+endif()
+if(BUILD_MPI AND MPI_CXX_FOUND)
+  message(STATUS "  MPI           = Enabled")
+endif()
 message(STATUS "========================================================")
-
