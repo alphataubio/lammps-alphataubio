@@ -94,13 +94,62 @@ if(NOT Eigen3_FOUND)
   target_include_directories(lammps PRIVATE "${dft_eigen3_SOURCE_DIR}")
 endif()
 
+# ---------------- Simple Boost setup for libint2 ----------------
+# Create minimal Boost structure to satisfy libint2's find_package(Boost)
+message(STATUS "[DFT] Setting up minimal Boost for libint2...")
+
+set(DFT_FAKE_BOOST_DIR "${CMAKE_BINARY_DIR}/_fake_boost")
+file(MAKE_DIRECTORY "${DFT_FAKE_BOOST_DIR}/boost")
+
+# Create a minimal boost/version.hpp that libint2 might check
+file(WRITE "${DFT_FAKE_BOOST_DIR}/boost/version.hpp" 
+"#ifndef BOOST_VERSION_HPP
+#define BOOST_VERSION_HPP
+#define BOOST_VERSION 108200
+#define BOOST_LIB_VERSION \"1_82\"
+#endif
+")
+
+# Create basic preprocessor headers that libint2 needs
+file(WRITE "${DFT_FAKE_BOOST_DIR}/boost/preprocessor.hpp"
+"#ifndef BOOST_PREPROCESSOR_HPP
+#define BOOST_PREPROCESSOR_HPP
+// Minimal preprocessor definitions for libint2
+#define BOOST_PP_CAT(a, b) BOOST_PP_CAT_I(a, b)
+#define BOOST_PP_CAT_I(a, b) a ## b
+#define BOOST_PP_STRINGIZE(text) BOOST_PP_STRINGIZE_I(text)  
+#define BOOST_PP_STRINGIZE_I(text) #text
+#endif
+")
+
+# Set up Boost variables for find_package
+set(BOOST_ROOT "${DFT_FAKE_BOOST_DIR}" CACHE PATH "Boost root directory" FORCE)
+set(Boost_INCLUDE_DIR "${DFT_FAKE_BOOST_DIR}" CACHE PATH "Boost include directory" FORCE)
+set(Boost_INCLUDE_DIRS "${DFT_FAKE_BOOST_DIR}" CACHE PATH "Boost include directories" FORCE)
+set(Boost_FOUND TRUE CACHE BOOL "Boost found flag" FORCE)
+set(Boost_VERSION "1.82.0" CACHE STRING "Boost version" FORCE)
+
+# Add to CMAKE_PREFIX_PATH
+list(APPEND CMAKE_PREFIX_PATH "${DFT_FAKE_BOOST_DIR}")
+
+message(STATUS "[DFT] Fake Boost configured: ${DFT_FAKE_BOOST_DIR}")
+
 # ---------------- libint2 vendoring via FetchContent ----------------
 if(NOT LIBINT2_FOUND AND NOT Libint2_FOUND)
   message(STATUS "[DFT] Fetching libint2...")
   
-  # Set libint2 build options before fetching
-  set(REQUIRE_EIGEN FALSE)
-  set(LIBINT2_REQUIRE_EIGEN FALSE)
+  # Set libint2 build options before fetching - disable Boost requirement
+  set(REQUIRE_EIGEN FALSE CACHE BOOL "" FORCE)
+  set(LIBINT2_REQUIRE_EIGEN FALSE CACHE BOOL "" FORCE)
+  set(LIBINT2_BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+  set(ENABLE_GENERIC ON CACHE BOOL "" FORCE)
+  set(LIBINT2_REALTYPE "double" CACHE STRING "" FORCE)
+  set(REQUIRE_BOOST FALSE CACHE BOOL "" FORCE)
+  set(LIBINT2_REQUIRE_BOOST FALSE CACHE BOOL "" FORCE)
+  
+  # Pre-set Boost variables to avoid find_package issues
+  set(Boost_FOUND FALSE CACHE BOOL "" FORCE)
+  set(BOOST_FOUND FALSE CACHE BOOL "" FORCE)
   
   FetchContent_Declare(
     dft_libint2
@@ -189,6 +238,7 @@ message(STATUS "================ DFT dependency summary ================")
 message(STATUS "  LibXC_FOUND   = ${LIBXC_FOUND}")
 message(STATUS "  Libint2_FOUND = ${LIBINT2_FOUND}")
 message(STATUS "  Eigen3_FOUND  = ${Eigen3_FOUND}")
+message(STATUS "  Boost_FOUND   = ${Boost_FOUND}")
 if(BLAS_FOUND AND LAPACK_FOUND)
   message(STATUS "  BLAS/LAPACK   = Found")
 else()
