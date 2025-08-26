@@ -170,6 +170,9 @@ class PairDFT : public Pair {
   void compute_xc_potential();
   void compute_exact_exchange();
   void evaluate_wb97mv_functional();  // Special implementation for wB97M-V
+  void compute_vv10_nlc(const std::vector<double> &rho,
+                        const std::vector<double> &sigma,
+                        double b, double C);  // VV10 non-local correlation
   
   // Grid integration methods
   void generate_integration_grid();
