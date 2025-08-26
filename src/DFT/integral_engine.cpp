@@ -13,10 +13,18 @@
 
 #include "pair_dft.h"
 #include <libint2.hpp>
+#include <libint2/basis.h>
+#include <libint2/shell.h>
+#include <libint2/engine.h>
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 using namespace LAMMPS_NS;
+
+// Type alias for libint2's small_vector
+template<typename T>
+using svector = libint2::svector<T>;
 
 /* ---------------------------------------------------------------------- */
 
@@ -47,14 +55,31 @@ void IntegralEngine::initialize_libint()
     auto exponents = basis_set->get_exponents(s);
     auto coefficients = basis_set->get_coefficients(s);
     
-    // Create contracted Gaussian shell
-    libint2::Shell shell;
-    shell.alpha = exponents;
-    shell.contr = {coefficients};
-    shell.l = {l};
+    // Convert std::vector to libint2's svector (small_vector)
+    libint2::svector<double> alpha_svec;
+    for (auto exp : exponents) {
+      alpha_svec.push_back(exp);
+    }
     
-    // Set origin (would come from atom positions in real use)
-    shell.O = {0.0, 0.0, 0.0};  // Placeholder
+    // Create contraction with proper svector type
+    libint2::Shell::Contraction contr;
+    contr.l = l;
+    contr.pure = false;  // Use Cartesian Gaussians
+    
+    // Convert coefficients to svector
+    for (auto coeff : coefficients) {
+      contr.coeff.push_back(coeff);
+    }
+    
+    // Create svector of contractions
+    libint2::svector<libint2::Shell::Contraction> contr_svec;
+    contr_svec.push_back(contr);
+    
+    // Create shell using default constructor and then set members
+    libint2::Shell shell;
+    shell.alpha = alpha_svec;
+    shell.contr = contr_svec;
+    shell.O = {{0.0, 0.0, 0.0}};  // Origin - placeholder, should come from atom positions
     
     shells.push_back(shell);
   }
@@ -63,18 +88,23 @@ void IntegralEngine::initialize_libint()
   
   // Initialize engines for different integral types
   engines.resize(4);
+  
+  // Get max angular momentum and number of primitives
+  int max_l = 0;
+  size_t max_nprim = 0;
+  for (const auto& shell : shells) {
+    max_l = std::max(max_l, shell.contr[0].l);
+    max_nprim = std::max(max_nprim, shell.alpha.size());
+  }
+  
   engines[0] = std::make_unique<libint2::Engine>(libint2::Operator::overlap, 
-                                                 libint_basis->max_nprim(), 
-                                                 libint_basis->max_l());
+                                                 max_nprim, max_l);
   engines[1] = std::make_unique<libint2::Engine>(libint2::Operator::kinetic,
-                                                 libint_basis->max_nprim(),
-                                                 libint_basis->max_l());
+                                                 max_nprim, max_l);
   engines[2] = std::make_unique<libint2::Engine>(libint2::Operator::nuclear,
-                                                 libint_basis->max_nprim(),
-                                                 libint_basis->max_l());
+                                                 max_nprim, max_l);
   engines[3] = std::make_unique<libint2::Engine>(libint2::Operator::coulomb,
-                                                 libint_basis->max_nprim(),
-                                                 libint_basis->max_l());
+                                                 max_nprim, max_l);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -97,8 +127,8 @@ void IntegralEngine::compute_overlap(Eigen::MatrixXd &S)
   
   int bf1 = 0;
   for (size_t s1 = 0; s1 < shells.size(); ++s1) {
+    int n1 = shells[s1].size();  // Number of basis functions in shell
     int bf2 = 0;
-    int n1 = shells[s1].size();
     
     for (size_t s2 = 0; s2 <= s1; ++s2) {
       int n2 = shells[s2].size();
@@ -135,8 +165,8 @@ void IntegralEngine::compute_kinetic(Eigen::MatrixXd &T)
   
   int bf1 = 0;
   for (size_t s1 = 0; s1 < shells.size(); ++s1) {
-    int bf2 = 0;
     int n1 = shells[s1].size();
+    int bf2 = 0;
     
     for (size_t s2 = 0; s2 <= s1; ++s2) {
       int n2 = shells[s2].size();
@@ -183,8 +213,8 @@ void IntegralEngine::compute_nuclear(Eigen::MatrixXd &V,
   
   int bf1 = 0;
   for (size_t s1 = 0; s1 < shells.size(); ++s1) {
-    int bf2 = 0;
     int n1 = shells[s1].size();
+    int bf2 = 0;
     
     for (size_t s2 = 0; s2 <= s1; ++s2) {
       int n2 = shells[s2].size();

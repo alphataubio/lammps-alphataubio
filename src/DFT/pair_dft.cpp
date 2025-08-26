@@ -24,6 +24,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -807,11 +808,29 @@ void PairDFT::parse_functional_name(const char *name)
     return;
   }
   
+  // Common functional name mappings
+  std::string func_name_str(name);
+  
+  // Convert common names to libxc format
+  if (func_name_str == "PBE") func_name_str = "GGA_X_PBE+GGA_C_PBE";
+  else if (func_name_str == "B3LYP") func_name_str = "HYB_GGA_XC_B3LYP";
+  else if (func_name_str == "LDA") func_name_str = "LDA_X+LDA_C_PW";
+  else if (func_name_str == "BLYP") func_name_str = "GGA_X_B88+GGA_C_LYP";
+  else if (func_name_str == "BP86") func_name_str = "GGA_X_B88+GGA_C_P86";
+  else if (func_name_str == "PBE0") func_name_str = "HYB_GGA_XC_PBEH";
+  else if (func_name_str == "HSE06") func_name_str = "HYB_GGA_XC_HSE06";
+  else if (func_name_str == "TPSS") func_name_str = "MGGA_X_TPSS+MGGA_C_TPSS";
+  else if (func_name_str == "SCAN") func_name_str = "MGGA_X_SCAN+MGGA_C_SCAN";
+  else if (func_name_str == "M06") func_name_str = "HYB_MGGA_XC_M06";
+  else if (func_name_str == "M06-2X") func_name_str = "HYB_MGGA_XC_M06_2X";
+  
+  const char* func_name_cstr = func_name_str.c_str();
+  
   // Check if it's a combined functional
-  if (strchr(name, '+') != nullptr) {
+  if (strchr(func_name_cstr, '+') != nullptr) {
     // Separate X and C functionals
     use_combined_xc = false;
-    char *name_copy = strdup(name);
+    char *name_copy = strdup(func_name_cstr);
     char *x_func = strtok(name_copy, "+");
     char *c_func = strtok(nullptr, "+");
     
@@ -841,9 +860,11 @@ void PairDFT::parse_functional_name(const char *name)
   } else {
     // Combined XC functional
     use_combined_xc = true;
-    xc_functional_xc = xc_functional_get_number(name);
+    xc_functional_xc = xc_functional_get_number(func_name_cstr);
     if (xc_functional_xc == -1) {
-      error->all(FLERR, "Unknown XC functional");
+      char errmsg[256];
+      snprintf(errmsg, 256, "Unknown XC functional: %s (tried as %s)", name, func_name_cstr);
+      error->all(FLERR, errmsg);
     }
     xc_func_xc = new xc_func_type;
     if (xc_func_init(xc_func_xc, xc_functional_xc, XC_UNPOLARIZED) != 0) {
