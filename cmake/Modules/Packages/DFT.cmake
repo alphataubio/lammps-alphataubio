@@ -1,300 +1,42 @@
-# DFT package bootstrap for LAMMPS using FetchContent
-# - Finds system installs first
-# - Otherwise uses FetchContent to download and build dependencies
-# - Installs Eigen3 locally to provide Eigen3Config.cmake for libint2
-# - Builds LibXC (6.2.2) and libint2 (2.7.2) via FetchContent
-# - Avoids cache collisions by using DFT_* variables
+# DFT package configuration for LAMMPS
+# Uses system-installed libint2, libxc, and eigen3
 
-include(FetchContent)
+# Find required packages
+find_package(PkgConfig REQUIRED)
 
-# Set FetchContent to be quiet by default
-set(FETCHCONTENT_QUIET ON)
+# Find Eigen3
+find_package(Eigen3 REQUIRED)
 
-# Set CMake policies to avoid warnings with external dependencies
-if(POLICY CMP0077)
-  cmake_policy(SET CMP0077 NEW)  # option() honors normal variables
-endif()
-if(POLICY CMP0167)
-  cmake_policy(SET CMP0167 OLD)  # Keep FindBoost module for older dependencies
-endif()
-if(POLICY CMP0169)
-  cmake_policy(SET CMP0169 OLD)  # Allow deprecated FetchContent_Populate if needed
-endif()
-if(POLICY CMP0148)
-  cmake_policy(SET CMP0148 OLD)  # Keep FindPythonInterp for older dependencies
-endif()
+# Find LibXC via pkg-config
+pkg_check_modules(LIBXC REQUIRED IMPORTED_TARGET libxc)
 
-# ---------------- System checks ----------------
-find_package(PkgConfig QUIET)
-set(LIBXC_FOUND FALSE)
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(LIBXC QUIET libxc>=5.0.0)
-endif()
-if(NOT LIBXC_FOUND)
-  find_path(LIBXC_INCLUDE_DIR NAMES xc.h PATH_SUFFIXES libxc)
-  find_library(LIBXC_LIBRARY NAMES xc libxc)
-  if(LIBXC_INCLUDE_DIR AND LIBXC_LIBRARY)
-    set(LIBXC_FOUND TRUE)
-    set(LIBXC_INCLUDE_DIRS ${LIBXC_INCLUDE_DIR})
-    set(LIBXC_LIBRARIES ${LIBXC_LIBRARY})
-  endif()
-endif()
+# Find libint2 via pkg-config
+pkg_check_modules(LIBINT2 REQUIRED IMPORTED_TARGET libint2)
 
-set(LIBINT2_FOUND FALSE)
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(LIBINT2 QUIET libint2)
-endif()
-if(NOT LIBINT2_FOUND)
-  find_path(LIBINT2_INCLUDE_DIR NAMES libint2.hpp)
-  find_library(LIBINT2_LIBRARY NAMES int2 libint2 libint)
-  if(LIBINT2_INCLUDE_DIR AND LIBINT2_LIBRARY)
-    set(LIBINT2_FOUND TRUE)
-    set(LIBINT2_INCLUDE_DIRS ${LIBINT2_INCLUDE_DIR})
-    set(LIBINT2_LIBRARIES ${LIBINT2_LIBRARY})
-  endif()
-endif()
+# Add includes and libraries to lammps target
+target_link_libraries(lammps PRIVATE
+  Eigen3::Eigen
+  PkgConfig::LIBXC
+  PkgConfig::LIBINT2
+)
 
-find_package(Eigen3 QUIET)
+# Add compile definitions
+target_compile_definitions(lammps PRIVATE 
+  -DLAMMPS_LIBINT2
+  -DLAMMPS_LIBXC
+)
 
-# ---------------- Eigen3 vendoring via FetchContent ----------------
-if(NOT Eigen3_FOUND)
-  message(STATUS "[DFT] Fetching Eigen3...")
-  
-  # Configure Eigen3 build options before fetching
-  set(BUILD_TESTING OFF CACHE BOOL "Disable Eigen3 testing" FORCE)
-  set(EIGEN_BUILD_DOC OFF CACHE BOOL "Disable Eigen3 documentation" FORCE)
-  set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "Disable Eigen3 pkgconfig" FORCE)
-  
-  FetchContent_Declare(
-    dft_eigen3
-    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
-    URL_HASH MD5=4c527a9171d71a72a9d4186e65bea559
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-  )
-  
-  # Use modern FetchContent approach
-  FetchContent_MakeAvailable(dft_eigen3)
-  
-  # Set up Eigen3 paths for libint2 compatibility
-  set(EIGEN3_INCLUDE_DIR "${dft_eigen3_SOURCE_DIR}" CACHE PATH "Eigen3 include directory" FORCE)
-  set(EIGEN3_ROOT_DIR "${dft_eigen3_SOURCE_DIR}" CACHE PATH "Eigen3 root directory" FORCE)
-  set(Eigen3_FOUND TRUE CACHE BOOL "Eigen3 found flag" FORCE)
-  
-  # Add the Eigen3 alias target if it doesn't exist
-  if(NOT TARGET Eigen3::Eigen)
-    add_library(Eigen3::Eigen INTERFACE IMPORTED)
-    set_target_properties(Eigen3::Eigen PROPERTIES
-      INTERFACE_INCLUDE_DIRECTORIES "${dft_eigen3_SOURCE_DIR}"
-    )
-  endif()
-  
-  message(STATUS "[DFT] Eigen3 configured from source: ${dft_eigen3_SOURCE_DIR}")
-  
-  # Add include directory to lammps target
-  target_include_directories(lammps PRIVATE "${dft_eigen3_SOURCE_DIR}")
-endif()
-
-# ---------------- Minimal Boost Preprocessor for libint2 ----------------
-# Download only the Boost Preprocessor headers that libint2 needs
-message(STATUS "[DFT] Setting up minimal Boost Preprocessor for libint2...")
-
-# Check if we already have Boost
-find_package(Boost 1.56 QUIET)
-
-if(NOT Boost_FOUND)
-  # Download minimal Boost - just preprocessor and its dependencies
-  # This is much smaller than the full Boost distribution  
-  FetchContent_Declare(
-    dft_boost_preprocessor
-    URL https://github.com/boostorg/preprocessor/archive/refs/tags/boost-1.82.0.tar.gz
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-  )
-  
-  FetchContent_Declare(
-    dft_boost_config
-    URL https://github.com/boostorg/config/archive/refs/tags/boost-1.82.0.tar.gz
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-  )
-  
-  # Download both
-  FetchContent_MakeAvailable(dft_boost_preprocessor dft_boost_config)
-  
-  # Use the include directories directly from the source trees
-  set(DFT_BOOST_INCLUDE_DIRS 
-    "${dft_boost_preprocessor_SOURCE_DIR}/include"
-    "${dft_boost_config_SOURCE_DIR}/include"
-  )
-  
-  message(STATUS "[DFT] Minimal Boost Preprocessor configured from:")
-  message(STATUS "  - ${dft_boost_preprocessor_SOURCE_DIR}/include")
-  message(STATUS "  - ${dft_boost_config_SOURCE_DIR}/include")
-else()
-  message(STATUS "[DFT] Using system Boost: ${Boost_INCLUDE_DIRS}")
-  set(DFT_BOOST_INCLUDE_DIRS "${Boost_INCLUDE_DIRS}")
-endif()
-
-# ---------------- libint2 vendoring via FetchContent ----------------
-if(NOT LIBINT2_FOUND AND NOT Libint2_Found)
-  message(STATUS "[DFT] Fetching libint2...")
-  
-  FetchContent_Declare(
-    dft_libint2
-    URL https://github.com/evaleev/libint/releases/download/v2.7.2/libint-2.7.2.tgz
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-  )
-  
-  # Get source to patch it before configuration
-  FetchContent_GetProperties(dft_libint2)
-  if(NOT dft_libint2_POPULATED)
-    FetchContent_Populate(dft_libint2)
-    
-    # If we downloaded our own Boost, copy it into libint2's source tree
-    # This way libint2 will use it as internal headers and won't export paths
-    if(TARGET dft_boost_preprocessor)
-      message(STATUS "[DFT] Copying Boost headers into libint2 source tree...")
-      file(MAKE_DIRECTORY "${dft_libint2_SOURCE_DIR}/include/libint2/boost")
-      
-      # Copy all Boost headers from both sources
-      file(GLOB_RECURSE BOOST_PP_HEADERS "${dft_boost_preprocessor_SOURCE_DIR}/include/boost/*.hpp")
-      file(GLOB_RECURSE BOOST_CONFIG_HEADERS "${dft_boost_config_SOURCE_DIR}/include/boost/*.hpp")
-      
-      foreach(header ${BOOST_PP_HEADERS})
-        file(RELATIVE_PATH rel_path "${dft_boost_preprocessor_SOURCE_DIR}/include" "${header}")
-        configure_file("${header}" "${dft_libint2_SOURCE_DIR}/include/libint2/${rel_path}" COPYONLY)
-      endforeach()
-      
-      foreach(header ${BOOST_CONFIG_HEADERS})
-        file(RELATIVE_PATH rel_path "${dft_boost_config_SOURCE_DIR}/include" "${header}")
-        configure_file("${header}" "${dft_libint2_SOURCE_DIR}/include/libint2/${rel_path}" COPYONLY)
-      endforeach()
-      
-      # Create boost/version.hpp for compatibility
-      file(WRITE "${dft_libint2_SOURCE_DIR}/include/libint2/boost/version.hpp"
-"//  Boost version.hpp configuration header
-#ifndef BOOST_VERSION_HPP
-#define BOOST_VERSION_HPP
-#define BOOST_VERSION 108200
-#define BOOST_LIB_VERSION \"1_82\"
-#define BOOST_VERSION_MAJOR 1
-#define BOOST_VERSION_MINOR 82
-#define BOOST_VERSION_PATCH 0
-#endif
-")
-      
-      # Patch libint2's CMakeLists.txt to prevent Boost path export issues
-      message(STATUS "[DFT] Patching libint2 to prevent Boost export...")
-      file(READ "${dft_libint2_SOURCE_DIR}/CMakeLists.txt" LIBINT2_CMAKE)
-      
-      # Replace any interface additions of Boost_INCLUDE_DIRS - comment them out
-      string(REPLACE
-        "target_include_directories(libint2_cxx INTERFACE \${Boost_INCLUDE_DIRS})"
-        "# Boost includes handled internally"
-        LIBINT2_CMAKE "${LIBINT2_CMAKE}")
-        
-      file(WRITE "${dft_libint2_SOURCE_DIR}/CMakeLists.txt" "${LIBINT2_CMAKE}")
-      
-      # Don't let libint2 search for external Boost - it will use internal copy
-      set(Boost_FOUND FALSE CACHE BOOL "" FORCE)
-      set(BOOST_FOUND FALSE CACHE BOOL "" FORCE)
-      unset(BOOST_ROOT CACHE)
-      unset(Boost_INCLUDE_DIR CACHE)
-      unset(Boost_INCLUDE_DIRS CACHE)
-    else()
-      # Using system Boost - let libint2 find it normally
-      message(STATUS "[DFT] Using system Boost for libint2")
-      # Just patch to prevent export issues
-      file(READ "${dft_libint2_SOURCE_DIR}/CMakeLists.txt" LIBINT2_CMAKE)
-      string(REGEX REPLACE
-        "target_include_directories\\(libint2_cxx INTERFACE ([^)]*)\\$\\{Boost_INCLUDE_DIRS\\}([^)]*)\\)"
-        "target_include_directories(libint2_cxx INTERFACE \\$<BUILD_INTERFACE:\\1\\${Boost_INCLUDE_DIRS}\\2>)"
-        LIBINT2_CMAKE "${LIBINT2_CMAKE}")
-      file(WRITE "${dft_libint2_SOURCE_DIR}/CMakeLists.txt" "${LIBINT2_CMAKE}")
-    endif()
-    
-    # Set libint2 build options
-    set(REQUIRE_EIGEN TRUE CACHE BOOL "" FORCE)
-    set(LIBINT2_REQUIRE_EIGEN TRUE CACHE BOOL "" FORCE)
-    set(LIBINT2_BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
-    set(ENABLE_GENERIC ON CACHE BOOL "" FORCE)
-    set(LIBINT2_REALTYPE "double" CACHE STRING "" FORCE)
-    
-    # Tell libint2 where to find Eigen
-    set(EIGEN3_INCLUDE_DIR "${EIGEN3_INCLUDE_DIR}" CACHE PATH "" FORCE)
-    
-    # Now configure the project
-    add_subdirectory(${dft_libint2_SOURCE_DIR} ${dft_libint2_BINARY_DIR})
-  endif()
-  
-  target_link_libraries(lammps PRIVATE libint2)
-  target_include_directories(lammps PRIVATE 
-    ${dft_libint2_SOURCE_DIR}/include 
-    ${dft_libint2_BINARY_DIR}/include
-  )
-  # If we're using our own Boost, lammps still needs to find it
-  if(DEFINED DFT_BOOST_INCLUDE_DIRS)
-    target_include_directories(lammps PRIVATE ${DFT_BOOST_INCLUDE_DIRS})
-  endif()
-  target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBINT2)
-  
-  message(STATUS "[DFT] libint2 configured")
-endif()
-
-# ---------------- LibXC vendoring via FetchContent ----------------
-if(NOT LIBXC_FOUND)
-  message(STATUS "[DFT] Fetching LibXC...")
-  
-  # Set LibXC build options before fetching
-  set(DISABLE_KXC ON CACHE BOOL "Disable LibXC KXC functionals" FORCE)
-  set(DISABLE_LXC ON CACHE BOOL "Disable LibXC LXC functionals" FORCE)
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static LibXC" FORCE)
-  
-  FetchContent_Declare(
-    dft_libxc
-    URL https://gitlab.com/libxc/libxc/-/archive/6.2.2/libxc-6.2.2.tar.gz
-    URL_HASH MD5=d96888788fda9864d17271049a6fa06d
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-    PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Patching LibXC CMakeLists.txt..." &&
-                  sed -i.bak "s/cmake_minimum_required(VERSION [0-9.]*/cmake_minimum_required(VERSION 3.5/" <SOURCE_DIR>/CMakeLists.txt || true
-  )
-  
-  # Use modern FetchContent approach
-  FetchContent_MakeAvailable(dft_libxc)
-  
-  target_link_libraries(lammps PRIVATE xc)
-  target_include_directories(lammps PRIVATE 
-    ${dft_libxc_SOURCE_DIR}/src 
-    ${dft_libxc_BINARY_DIR}
-  )
-  target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBXC)
-  
-  message(STATUS "[DFT] LibXC configured")
-else()
-  target_include_directories(lammps PRIVATE ${LIBXC_INCLUDE_DIRS})
-  target_link_libraries(lammps PRIVATE ${LIBXC_LIBRARIES})
-  target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBXC)
-  message(STATUS "[DFT] Using system LibXC")
-endif()
-
-# ---------------- Optional BLAS/LAPACK ----------------
-find_package(BLAS QUIET)
-find_package(LAPACK QUIET)
+# Optional BLAS/LAPACK
+find_package(BLAS)
+find_package(LAPACK)
 if(BLAS_FOUND AND LAPACK_FOUND)
   target_link_libraries(lammps PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
   message(STATUS "[DFT] BLAS/LAPACK found")
 endif()
 
-# ---------------- Optional OpenMP/MPI ----------------
-if(BUILD_OMP)
-  find_package(OpenMP QUIET)
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(lammps PRIVATE OpenMP::OpenMP_CXX)
-    target_compile_definitions(lammps PRIVATE -DDFT_USE_OPENMP)
-    message(STATUS "[DFT] OpenMP support enabled")
-  endif()
-endif()
-
+# Optional MPI support
 if(BUILD_MPI)
-  find_package(MPI QUIET)
+  find_package(MPI)
   if(MPI_CXX_FOUND)
     target_include_directories(lammps PRIVATE ${MPI_CXX_INCLUDE_DIRS})
     target_link_libraries(lammps PRIVATE ${MPI_CXX_LIBRARIES})
@@ -303,20 +45,19 @@ if(BUILD_MPI)
   endif()
 endif()
 
-message(STATUS "================ DFT dependency summary ================")
-message(STATUS "  LibXC_FOUND   = ${LIBXC_FOUND}")
-message(STATUS "  Libint2_FOUND = ${LIBINT2_FOUND}")
-message(STATUS "  Eigen3_FOUND  = ${Eigen3_FOUND}")
-message(STATUS "  Boost_FOUND   = ${Boost_FOUND}")
-if(BLAS_FOUND AND LAPACK_FOUND)
-  message(STATUS "  BLAS/LAPACK   = Found")
-else()
-  message(STATUS "  BLAS/LAPACK   = Not found")
+# Optional OpenMP support
+if(BUILD_OMP)
+  find_package(OpenMP)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(lammps PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(lammps PRIVATE -DDFT_USE_OPENMP)
+    message(STATUS "[DFT] OpenMP support enabled")
+  endif()
 endif()
-if(BUILD_OMP AND OpenMP_CXX_FOUND)
-  message(STATUS "  OpenMP        = Enabled")
-endif()
-if(BUILD_MPI AND MPI_CXX_FOUND)
-  message(STATUS "  MPI           = Enabled")
-endif()
-message(STATUS "========================================================")
+
+message(STATUS "================ DFT package configuration ================")
+message(STATUS "  Eigen3:      ${EIGEN3_INCLUDE_DIR}")
+message(STATUS "  LibXC:       ${LIBXC_INCLUDE_DIRS}")
+message(STATUS "  libint2:     ${LIBINT2_INCLUDE_DIRS}")
+message(STATUS "  Libraries:   ${LIBXC_LIBRARIES} ${LIBINT2_LIBRARIES}")
+message(STATUS "===========================================================")
