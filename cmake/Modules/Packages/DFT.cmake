@@ -107,14 +107,12 @@ if(NOT Boost_FOUND)
   FetchContent_Declare(
     dft_boost_preprocessor
     URL https://github.com/boostorg/preprocessor/archive/refs/tags/boost-1.82.0.tar.gz
-    URL_HASH SHA256=7c82a0b7f22e81b07b2fa4426da4ca3645a1a8026e67a5dfc97dfed2067ae072
     DOWNLOAD_EXTRACT_TIMESTAMP ON
   )
   
   FetchContent_Declare(
     dft_boost_config
     URL https://github.com/boostorg/config/archive/refs/tags/boost-1.82.0.tar.gz
-    URL_HASH SHA256=3d21f4cbc71c592eaa35f5ffa02c4075b7af57115f814e9edfc1d55e38243faa
     DOWNLOAD_EXTRACT_TIMESTAMP ON
   )
   
@@ -181,6 +179,23 @@ if(NOT Boost_FOUND)
 #endif
 ")
   
+  # Set up Boost variables for find_package and libint2
+  set(BOOST_ROOT "${DFT_BOOST_ROOT}" CACHE PATH "Boost root directory" FORCE)
+  set(BOOST_INCLUDEDIR "${DFT_BOOST_ROOT}" CACHE PATH "Boost include directory" FORCE) 
+  set(Boost_INCLUDE_DIR "${DFT_BOOST_ROOT}" CACHE PATH "Boost include directory" FORCE)
+  set(Boost_INCLUDE_DIRS "${DFT_BOOST_ROOT}" CACHE PATH "Boost include directories" FORCE)
+  set(Boost_FOUND TRUE CACHE BOOL "Boost found flag" FORCE)
+  set(Boost_VERSION "1.82.0" CACHE STRING "Boost version" FORCE)
+  set(Boost_VERSION_STRING "1.82.0" CACHE STRING "Boost version string" FORCE)
+  set(Boost_VERSION_MACRO "108200" CACHE STRING "Boost version macro" FORCE)
+  set(Boost_MAJOR_VERSION "1" CACHE STRING "Boost major version" FORCE)
+  set(Boost_MINOR_VERSION "82" CACHE STRING "Boost minor version" FORCE)
+  set(Boost_SUBMINOR_VERSION "0" CACHE STRING "Boost subminor version" FORCE)
+  
+  # Add to CMAKE_PREFIX_PATH and include directories
+  list(APPEND CMAKE_PREFIX_PATH "${DFT_BOOST_ROOT}")
+  set(CMAKE_INCLUDE_PATH "${DFT_BOOST_ROOT};${CMAKE_INCLUDE_PATH}" CACHE STRING "" FORCE)
+  
   message(STATUS "[DFT] Minimal Boost Preprocessor configured: ${DFT_BOOST_ROOT}")
 else()
   message(STATUS "[DFT] Using system Boost: ${Boost_INCLUDE_DIRS}")
@@ -197,82 +212,28 @@ if(NOT LIBINT2_FOUND AND NOT Libint2_FOUND)
     DOWNLOAD_EXTRACT_TIMESTAMP ON
   )
   
-  # Get the source directory first
-  FetchContent_GetProperties(dft_libint2)
-  if(NOT dft_libint2_POPULATED)
-    FetchContent_Populate(dft_libint2)
-    
-    # Copy our minimal Boost directly into libint2's source tree
-    # This avoids path export issues and uses libint2's internal Boost mechanism
-    if(EXISTS "${DFT_BOOST_ROOT}/boost")
-      message(STATUS "[DFT] Copying Boost headers into libint2 source tree...")
-      file(MAKE_DIRECTORY "${dft_libint2_SOURCE_DIR}/include/libint2/boost")
-      file(COPY "${DFT_BOOST_ROOT}/boost/" 
-           DESTINATION "${dft_libint2_SOURCE_DIR}/include/libint2/boost")
-    endif()
-    
-    # Patch libint2's CMakeLists.txt to avoid boost export issues
-    message(STATUS "[DFT] Patching libint2 CMakeLists.txt...")
-    file(READ "${dft_libint2_SOURCE_DIR}/CMakeLists.txt" LIBINT2_CMAKE)
-    
-    # Replace any Boost_INCLUDE_DIRS interface additions with BUILD_INTERFACE only
-    string(REGEX REPLACE
-      "target_include_directories\\(libint2_cxx INTERFACE ([^)]*)\\$\\{Boost_INCLUDE_DIRS\\}([^)]*)\\)"
-      "target_include_directories(libint2_cxx INTERFACE $<BUILD_INTERFACE:\\1\${Boost_INCLUDE_DIRS}\\2>)"
-      LIBINT2_CMAKE "${LIBINT2_CMAKE}")
-      
-    file(WRITE "${dft_libint2_SOURCE_DIR}/CMakeLists.txt" "${LIBINT2_CMAKE}")
-    
-    # Save and clear Boost variables to prevent libint2 from using system boost
-    set(SAVED_BOOST_ROOT "${BOOST_ROOT}")
-    set(SAVED_BOOST_INCLUDEDIR "${BOOST_INCLUDEDIR}")
-    set(SAVED_Boost_INCLUDE_DIR "${Boost_INCLUDE_DIR}")
-    set(SAVED_Boost_INCLUDE_DIRS "${Boost_INCLUDE_DIRS}")
-    set(SAVED_Boost_FOUND "${Boost_FOUND}")
-    
-    # Clear all Boost-related variables
-    unset(BOOST_ROOT CACHE)
-    unset(BOOST_INCLUDEDIR CACHE)
-    unset(Boost_DIR CACHE)
-    unset(Boost_INCLUDE_DIR CACHE)
-    unset(Boost_INCLUDE_DIRS CACHE)
-    unset(Boost_FOUND CACHE)
-    unset(Boost_VERSION CACHE)
-    unset(Boost_VERSION_STRING CACHE)
-    unset(Boost_VERSION_MACRO CACHE)
-    unset(Boost_MAJOR_VERSION CACHE)
-    unset(Boost_MINOR_VERSION CACHE)
-    unset(Boost_SUBMINOR_VERSION CACHE)
-    
-    # Temporarily remove from CMAKE_PREFIX_PATH
-    string(REPLACE "${DFT_BOOST_ROOT}" "" CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}")
-    string(REPLACE "${DFT_BOOST_ROOT}" "" CMAKE_INCLUDE_PATH "${CMAKE_INCLUDE_PATH}")
-    
-    # Set libint2 build options
-    set(REQUIRE_EIGEN TRUE CACHE BOOL "" FORCE)
-    set(LIBINT2_REQUIRE_EIGEN TRUE CACHE BOOL "" FORCE)
-    set(LIBINT2_BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
-    set(ENABLE_GENERIC ON CACHE BOOL "" FORCE)
-    set(LIBINT2_REALTYPE "double" CACHE STRING "" FORCE)
-    
-    # Tell libint2 where to find Eigen
-    set(EIGEN3_INCLUDE_DIR "${EIGEN3_INCLUDE_DIR}" CACHE PATH "" FORCE)
-    
-    # Now configure the project - libint2 will use its internal boost copy
-    add_subdirectory(${dft_libint2_SOURCE_DIR} ${dft_libint2_BINARY_DIR})
-    
-    # Restore Boost variables after libint2 configuration
-    set(BOOST_ROOT "${SAVED_BOOST_ROOT}" CACHE PATH "Boost root directory" FORCE)
-    set(BOOST_INCLUDEDIR "${SAVED_BOOST_INCLUDEDIR}" CACHE PATH "Boost include directory" FORCE)
-    set(Boost_INCLUDE_DIR "${SAVED_Boost_INCLUDE_DIR}" CACHE PATH "Boost include directory" FORCE)
-    set(Boost_INCLUDE_DIRS "${SAVED_Boost_INCLUDE_DIRS}" CACHE PATH "Boost include directories" FORCE)
-    set(Boost_FOUND "${SAVED_Boost_FOUND}" CACHE BOOL "Boost found flag" FORCE)
-  endif()
+  # Set libint2 build options
+  set(REQUIRE_EIGEN TRUE CACHE BOOL "" FORCE)
+  set(LIBINT2_REQUIRE_EIGEN TRUE CACHE BOOL "" FORCE)
+  set(LIBINT2_BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+  set(ENABLE_GENERIC ON CACHE BOOL "" FORCE)
+  set(LIBINT2_REALTYPE "double" CACHE STRING "" FORCE)
+  
+  # Tell libint2 where to find dependencies
+  set(EIGEN3_INCLUDE_DIR "${EIGEN3_INCLUDE_DIR}" CACHE PATH "" FORCE)
+  set(BOOST_ROOT "${DFT_BOOST_ROOT}" CACHE PATH "" FORCE)
+  set(BOOST_INCLUDEDIR "${DFT_BOOST_ROOT}" CACHE PATH "" FORCE)
+  set(Boost_INCLUDE_DIR "${DFT_BOOST_ROOT}" CACHE PATH "" FORCE)
+  set(Boost_INCLUDE_DIRS "${DFT_BOOST_ROOT}" CACHE PATH "" FORCE)
+  
+  # Configure and build libint2
+  FetchContent_MakeAvailable(dft_libint2)
   
   target_link_libraries(lammps PRIVATE libint2)
   target_include_directories(lammps PRIVATE 
     ${dft_libint2_SOURCE_DIR}/include 
     ${dft_libint2_BINARY_DIR}/include
+    ${DFT_BOOST_ROOT}  # Add our Boost headers to the include path!
   )
   target_compile_definitions(lammps PRIVATE -DLAMMPS_LIBINT2)
   
