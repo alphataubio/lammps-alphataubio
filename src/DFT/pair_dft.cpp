@@ -40,7 +40,7 @@ using json = nlohmann_lmp::json;
 
 PairDFT::PairDFT(LAMMPS *lmp) : Pair(lmp)
 {
-  single_enable = 1;
+  single_enable = 0;
   restartinfo = 1;
   one_coeff = 0;
   
@@ -851,7 +851,7 @@ void PairDFT::parse_functional_name(const char *name)
     }
     
     // Check functional family
-    xc_func_info_type *info = xc_func_get_info(xc_func_xc);
+    const xc_func_info_type *info = xc_func_get_info(xc_func_xc);
     int family = xc_func_info_get_family(info);
     
     if (family == XC_FAMILY_HYB_GGA || family == XC_FAMILY_HYB_MGGA) {
@@ -1176,27 +1176,6 @@ void PairDFT::print_scf_summary()
     utils::logmesg(lmp, fmt::format("  TOTAL:           {:15.8f}\n", total_dft_energy));
     utils::logmesg(lmp, "================================================\n\n");
   }
-}
-
-/* ----------------------------------------------------------------------
-   single() function for energy and force calculations
-------------------------------------------------------------------------- */
-
-double PairDFT::single(int i, int j, int itype, int jtype,
-                      double rsq, double factor_coul, double factor_lj,
-                      double &fforce)
-{
-  // For DFT, single pair interactions don't have the usual meaning
-  // Return a simple repulsion at very short range
-  
-  double r = sqrt(rsq);
-  if (r < 0.5) {
-    fforce = 1000.0 * exp(-10.0 * r) / r * factor_lj;
-    return 100.0 * exp(-10.0 * r) * factor_lj;
-  }
-  
-  fforce = 0.0;
-  return 0.0;
 }
 
 /* ----------------------------------------------------------------------
