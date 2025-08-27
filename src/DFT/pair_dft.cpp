@@ -34,6 +34,29 @@
 #include <libint2.hpp>
 #include <xc.h>
 
+// LibXC functional IDs for common functionals
+#ifndef XC_LDA_X
+#define XC_LDA_X 1
+#endif
+#ifndef XC_LDA_C_PW
+#define XC_LDA_C_PW 12
+#endif
+#ifndef XC_GGA_X_PBE
+#define XC_GGA_X_PBE 101
+#endif
+#ifndef XC_GGA_C_PBE
+#define XC_GGA_C_PBE 130
+#endif
+#ifndef XC_GGA_X_B88
+#define XC_GGA_X_B88 106
+#endif
+#ifndef XC_GGA_C_LYP
+#define XC_GGA_C_LYP 131
+#endif
+#ifndef XC_HYB_GGA_XC_B3LYP
+#define XC_HYB_GGA_XC_B3LYP 402
+#endif
+
 using namespace LAMMPS_NS;
 using json = nlohmann_lmp::json;
 
@@ -344,169 +367,6 @@ void PairDFT::build_fock_matrix()
 }
 
 /* ----------------------------------------------------------------------
-   Special implementation for wB97M-V functional
-------------------------------------------------------------------------- */
-
-void PairDFT::evaluate_wb97mv_functional()
-{
-  // wB97M-V is a range-separated meta-GGA functional with VV10 NLC
-  // Parameters from the original paper (Mardirossian & Head-Gordon, 2016)
-  
-  const double omega = 0.3;  // Range-separation parameter
-  const double c_x_lr = 1.0;  // Long-range HF exchange
-  const double c_x_sr = 0.15;  // Short-range HF exchange at r=0
-  
-  // B97 exchange parameters for wB97M-V
-  const double a0_x = 0.85;
-  const double a1_x = 1.007;
-  const double a2_x = 0.259;
-  
-  // B97 correlation parameters for wB97M-V
-  const double a0_c_ss = 1.0;
-  const double a1_c_ss = -3.382;
-  const double a2_c_ss = -0.892;
-  const double a0_c_os = 1.0;
-  const double a1_c_os = -1.855;
-  const double a2_c_os = 0.653;
-  
-  // VV10 NLC parameters
-  const double b_vv10 = 6.0;
-  const double C_vv10 = 0.01;
-  
-  // Generate grid if not already done
-  std::vector<std::vector<double>> atom_positions;
-  std::vector<int> atomic_numbers;
-  
-  // Get atomic positions and numbers from LAMMPS atoms
-  double **x = atom->x;
-  int *type = atom->type;
-  int nlocal = atom->nlocal;
-  
-  for (int i = 0; i < nlocal; i++) {
-    atom_positions.push_back({x[i][0], x[i][1], x[i][2]});
-    atomic_numbers.push_back(static_cast<int>(atomic_charges[type[i]][type[i]]));
-  }
-  
-  grid_integrator->generate_grid(atom_positions, atomic_numbers);
-  
-  // Evaluate density and its derivatives on the grid
-  int npoints = grid_integrator->get_n_points();
-  std::vector<double> rho(npoints);
-  std::vector<double> sigma(npoints);  // |grad rho|^2
-  std::vector<double> tau(npoints);    // Kinetic energy density
-  
-  // TODO: Evaluate basis functions and density on grid points
-  // This requires detailed implementation of basis function evaluation
-  
-  // Apply B97-style inhomogeneity correction factor
-  std::vector<double> s(npoints);  // Reduced density gradient
-  std::vector<double> u_x(npoints);  // Exchange enhancement factor
-  std::vector<double> u_c_ss(npoints);  // Same-spin correlation factor
-  std::vector<double> u_c_os(npoints);  // Opposite-spin correlation factor
-  
-  for (int i = 0; i < npoints; i++) {
-    if (rho[i] > 1e-15) {
-      // Reduced density gradient
-      s[i] = sqrt(sigma[i]) / (2.0 * pow(3.0 * M_PI * M_PI, 1.0/3.0) * pow(rho[i], 4.0/3.0));
-      
-      // B97 inhomogeneity correction factor
-      double s2 = s[i] * s[i];
-      double denom = 1.0 + 0.004 * s2;
-      u_x[i] = (a0_x + a1_x * s2 + a2_x * s2 * s2) / denom;
-      u_c_ss[i] = (a0_c_ss + a1_c_ss * s2 + a2_c_ss * s2 * s2) / denom;
-      u_c_os[i] = (a0_c_os + a1_c_os * s2 + a2_c_os * s2 * s2) / denom;
-    }
-  }
-  
-  // Compute short-range exchange-correlation energy
-  std::vector<double> exc_sr(npoints);
-  std::vector<double> vrho_sr(npoints);
-  std::vector<double> vsigma_sr(npoints);
-  std::vector<double> vtau_sr(npoints);
-  
-  // Use modified B97 functional for short-range part
-  for (int i = 0; i < npoints; i++) {
-    if (rho[i] > 1e-15) {
-      // LDA exchange energy density
-      double ex_lda = -0.75 * pow(3.0 * rho[i] / M_PI, 1.0/3.0);
-      
-      // Apply enhancement factor
-      exc_sr[i] = ex_lda * u_x[i];
-      
-      // Add correlation (simplified - should use proper LDA correlation)
-      double ec_lda = -0.05 * pow(rho[i], 1.0/3.0);  // Placeholder
-      exc_sr[i] += ec_lda * (u_c_ss[i] + u_c_os[i]) / 2.0;
-      
-      // Meta-GGA contribution from kinetic energy density
-      if (tau[i] > 1e-15) {
-        double tau_w = sigma[i] / (8.0 * rho[i]);  // von Weizsäcker kinetic energy
-        double alpha = (tau[i] - tau_w) / tau[i];
-        exc_sr[i] *= (1.0 + 0.1 * alpha);  // Simple meta-GGA correction
-      }
-    }
-  }
-  
-  // Add VV10 non-local correlation
-  compute_vv10_nlc(rho, sigma, b_vv10, C_vv10);
-  
-  // Compute exact exchange contribution
-  // Short-range: c_x_sr * HF_sr(omega)
-  // Long-range: c_x_lr * HF_lr(omega)
-  
-  // The actual implementation would require:
-  // 1. Computing range-separated ERIs
-  // 2. Building separate short-range and long-range exchange matrices
-  // 3. Properly combining all contributions
-  
-  if (comm->me == 0) {
-    utils::logmesg(lmp, "wB97M-V functional evaluation completed\n");
-  }
-}
-
-/* ----------------------------------------------------------------------
-   Compute VV10 non-local correlation
-------------------------------------------------------------------------- */
-
-void PairDFT::compute_vv10_nlc(const std::vector<double> &rho,
-                               const std::vector<double> &sigma,
-                               double b, double C)
-{
-  // VV10 non-local correlation functional
-  // Vydrov & Van Voorhis, JCP 133, 244103 (2010)
-  
-  int npoints = rho.size();
-  std::vector<double> omega(npoints);
-  
-  // Compute omega(r) = sqrt(g(r)) where g is defined in VV10 paper
-  for (int i = 0; i < npoints; i++) {
-    if (rho[i] > 1e-15) {
-      double kf = pow(3.0 * M_PI * M_PI * rho[i], 1.0/3.0);
-      double wp = 4.0 * M_PI * rho[i];
-      
-      // Compute g factor
-      double s2 = sigma[i] / (4.0 * pow(kf, 2) * rho[i] * rho[i]);
-      double g = wp / (kf * kf) * (1.0 + C * s2);
-      
-      omega[i] = sqrt(g);
-    }
-  }
-  
-  // Double integral for non-local correlation
-  // This is computationally expensive and typically requires special techniques
-  // For now, using a simplified local approximation
-  
-  double e_nlc = 0.0;
-  for (int i = 0; i < npoints; i++) {
-    if (rho[i] > 1e-15) {
-      // Simplified local approximation to NLC
-      e_nlc += -0.01 * rho[i] * pow(omega[i], 0.5);
-    }
-  }
-  
-  xc_energy += e_nlc;
-}
-
-/* ----------------------------------------------------------------------
    Solve Roothaan-Hall equations
 ------------------------------------------------------------------------- */
 
@@ -789,7 +649,13 @@ void PairDFT::settings(int narg, char **arg)
 
 void PairDFT::parse_functional_name(const char *name)
 {
+
+  utils::logmesg(lmp, "*** parse_functional_name({})\n", name);
+
   // Special handling for wB97M-V
+  // HYB_MGGA_XC_WB97M_V (id=531): wB97M-V exchange-correlation functional
+  // N. Mardirossian and M. Head-Gordon., J. Chem. Phys. 144, 214110 (2016) (doi: 10.1063/1.4952647)
+
   if (strcasecmp(name, "wB97M-V") == 0 || strcasecmp(name, "wb97mv") == 0) {
     // wB97M-V is not directly in LibXC, we need special implementation
     is_range_separated = true;
@@ -808,36 +674,196 @@ void PairDFT::parse_functional_name(const char *name)
     return;
   }
   
-  // Common functional name mappings
-  std::string func_name_str(name);
+  // Direct mapping of common functionals to LibXC IDs
+  std::string func_str(name);
   
-  // Convert common names to libxc format
-  if (func_name_str == "PBE") func_name_str = "GGA_X_PBE+GGA_C_PBE";
-  else if (func_name_str == "B3LYP") func_name_str = "HYB_GGA_XC_B3LYP";
-  else if (func_name_str == "LDA") func_name_str = "LDA_X+LDA_C_PW";
-  else if (func_name_str == "BLYP") func_name_str = "GGA_X_B88+GGA_C_LYP";
-  else if (func_name_str == "BP86") func_name_str = "GGA_X_B88+GGA_C_P86";
-  else if (func_name_str == "PBE0") func_name_str = "HYB_GGA_XC_PBEH";
-  else if (func_name_str == "HSE06") func_name_str = "HYB_GGA_XC_HSE06";
-  else if (func_name_str == "TPSS") func_name_str = "MGGA_X_TPSS+MGGA_C_TPSS";
-  else if (func_name_str == "SCAN") func_name_str = "MGGA_X_SCAN+MGGA_C_SCAN";
-  else if (func_name_str == "M06") func_name_str = "HYB_MGGA_XC_M06";
-  else if (func_name_str == "M06-2X") func_name_str = "HYB_MGGA_XC_M06_2X";
+  // Handle common functional names with direct ID mapping
+  if (func_str == "PBE") {
+    // PBE = PBE exchange + PBE correlation
+    use_combined_xc = false;
+    xc_functional_x = XC_GGA_X_PBE;  // ID 101
+    xc_functional_c = XC_GGA_C_PBE;  // ID 130
+    
+    xc_func_x = new xc_func_type;
+    xc_func_c = new xc_func_type;
+    
+    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize PBE exchange functional");
+    }
+    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize PBE correlation functional");
+    }
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, "DFT: Using PBE functional (GGA)\n");
+    }
+    return;
+  }
+  else if (func_str == "LDA") {
+    // LDA = Slater exchange + PW correlation
+    use_combined_xc = false;
+    xc_functional_x = XC_LDA_X;     // ID 1
+    xc_functional_c = XC_LDA_C_PW;  // ID 12
+    
+    xc_func_x = new xc_func_type;
+    xc_func_c = new xc_func_type;
+    
+    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize LDA exchange functional");
+    }
+    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize LDA correlation functional");
+    }
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, "DFT: Using LDA functional\n");
+    }
+    return;
+  }
+  else if (func_str == "B3LYP") {
+    // B3LYP is a combined hybrid functional
+    use_combined_xc = true;
+    xc_functional_xc = XC_HYB_GGA_XC_B3LYP;  // ID 402
+    
+    xc_func_xc = new xc_func_type;
+    if (xc_func_init(xc_func_xc, xc_functional_xc, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize B3LYP functional");
+    }
+    
+    // Check if it's hybrid
+    is_hybrid = true;
+    hybrid_coeff = xc_hyb_exx_coef(xc_func_xc);
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, fmt::format("DFT: Using B3LYP hybrid functional ({}% HF exchange)\n", 
+                                      hybrid_coeff * 100));
+    }
+    return;
+  }
+  else if (func_str == "PBE0" || func_str == "PBEH") {
+    // PBE0/PBEh is a hybrid functional
+    use_combined_xc = true;
+    xc_functional_xc = 406;  // XC_HYB_GGA_XC_PBEH
+    
+    xc_func_xc = new xc_func_type;
+    if (xc_func_init(xc_func_xc, xc_functional_xc, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize PBE0 functional");
+    }
+    
+    // Check if it's hybrid
+    is_hybrid = true;
+    hybrid_coeff = xc_hyb_exx_coef(xc_func_xc);
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, fmt::format("DFT: Using PBE0 hybrid functional ({}% HF exchange)\n", 
+                                      hybrid_coeff * 100));
+    }
+    return;
+  }
+  else if (func_str == "BP86") {
+    // BP86 = B88 exchange + P86 correlation
+    use_combined_xc = false;
+    xc_functional_x = XC_GGA_X_B88;   // ID 106
+    xc_functional_c = 132;  // XC_GGA_C_P86
+    
+    xc_func_x = new xc_func_type;
+    xc_func_c = new xc_func_type;
+    
+    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize B88 exchange functional");
+    }
+    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize P86 correlation functional");
+    }
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, "DFT: Using BP86 functional (GGA)\n");
+    }
+    return;
+  }
+  else if (func_str == "TPSS") {
+    // TPSS = TPSS exchange + TPSS correlation
+    use_combined_xc = false;
+    xc_functional_x = 202;  // XC_MGGA_X_TPSS
+    xc_functional_c = 231;  // XC_MGGA_C_TPSS
+    
+    xc_func_x = new xc_func_type;
+    xc_func_c = new xc_func_type;
+    
+    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize TPSS exchange functional");
+    }
+    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize TPSS correlation functional");
+    }
+    
+    is_meta_gga = true;
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, "DFT: Using TPSS functional (meta-GGA)\n");
+    }
+    return;
+  }
+  else if (func_str == "SCAN") {
+    // SCAN = SCAN exchange + SCAN correlation
+    use_combined_xc = false;
+    xc_functional_x = 263;  // XC_MGGA_X_SCAN
+    xc_functional_c = 267;  // XC_MGGA_C_SCAN
+    
+    xc_func_x = new xc_func_type;
+    xc_func_c = new xc_func_type;
+    
+    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize SCAN exchange functional");
+    }
+    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize SCAN correlation functional");
+    }
+    
+    is_meta_gga = true;
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, "DFT: Using SCAN functional (meta-GGA)\n");
+    }
+    return;
+  }
+  else if (func_str == "BLYP") {
+    // BLYP = B88 exchange + LYP correlation  
+    use_combined_xc = false;
+    xc_functional_x = XC_GGA_X_B88;  // ID 106
+    xc_functional_c = XC_GGA_C_LYP;  // ID 131
+    
+    xc_func_x = new xc_func_type;
+    xc_func_c = new xc_func_type;
+    
+    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize B88 exchange functional");
+    }
+    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
+      error->all(FLERR, "Failed to initialize LYP correlation functional");
+    }
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, "DFT: Using BLYP functional (GGA)\n");
+    }
+    return;
+  }
   
-  const char* func_name_cstr = func_name_str.c_str();
-  
-  // Check if it's a combined functional
-  if (strchr(func_name_cstr, '+') != nullptr) {
+  // If not a common name, try to parse as LibXC format
+  // Check if it contains a "+" for separate functionals
+  if (strchr(name, '+') != nullptr) {
     // Separate X and C functionals
     use_combined_xc = false;
-    char *name_copy = strdup(func_name_cstr);
+    char *name_copy = strdup(name);
     char *x_func = strtok(name_copy, "+");
     char *c_func = strtok(nullptr, "+");
     
     if (x_func) {
       xc_functional_x = xc_functional_get_number(x_func);
       if (xc_functional_x == -1) {
-        error->all(FLERR, "Unknown exchange functional");
+        char errmsg[256];
+        snprintf(errmsg, 256, "Unknown exchange functional: %s", x_func);
+        error->all(FLERR, errmsg);
       }
       xc_func_x = new xc_func_type;
       if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
@@ -848,7 +874,9 @@ void PairDFT::parse_functional_name(const char *name)
     if (c_func) {
       xc_functional_c = xc_functional_get_number(c_func);
       if (xc_functional_c == -1) {
-        error->all(FLERR, "Unknown correlation functional");
+        char errmsg[256];
+        snprintf(errmsg, 256, "Unknown correlation functional: %s", c_func);
+        error->all(FLERR, errmsg);
       }
       xc_func_c = new xc_func_type;
       if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
@@ -858,12 +886,14 @@ void PairDFT::parse_functional_name(const char *name)
     
     free(name_copy);
   } else {
-    // Combined XC functional
+    // Try as a combined XC functional
     use_combined_xc = true;
-    xc_functional_xc = xc_functional_get_number(func_name_cstr);
+    xc_functional_xc = xc_functional_get_number(name);
     if (xc_functional_xc == -1) {
-      char errmsg[256];
-      snprintf(errmsg, 256, "Unknown XC functional: %s (tried as %s)", name, func_name_cstr);
+      char errmsg[512];
+      snprintf(errmsg, 512, "Unknown functional: %s\n"
+               "Supported common names: PBE, LDA, B3LYP, BLYP, BP86, PBE0, TPSS, SCAN, wB97M-V\n"
+               "Or use LibXC format: HYB_GGA_XC_B3LYP, GGA_X_PBE+GGA_C_PBE, etc.", name);
       error->all(FLERR, errmsg);
     }
     xc_func_xc = new xc_func_type;
@@ -1293,4 +1323,555 @@ void PairDFT::write_data_all(FILE *fp)
     for (int j = i; j <= atom->ntypes; j++)
       fprintf(fp, "%d %d %g %g %g\n", i, j,
               atomic_charges[i][j], vdw_radii[i][j], cut[i][j]);
+}
+
+/* ======================================================================
+   Implementation of modular component classes
+   These would normally be in separate .cpp files, but consolidated here
+   ====================================================================== */
+
+/* ----------------------------------------------------------------------
+   BasisSetManager implementation
+   Note: This is a simplified implementation. The full version would be
+   in basis_manager.hpp as a header-only library with the implementation.
+   Since we're using libint2, most of the work is handled by libint2.
+------------------------------------------------------------------------- */
+
+// The BasisSetManager implementation is handled by the basis_manager.hpp file
+
+/* ----------------------------------------------------------------------
+   IntegralEngine implementation  
+   Note: This is handled by libint2 through integral_engine.hpp
+------------------------------------------------------------------------- */
+
+// The IntegralEngine implementation is handled by the integral_engine.hpp file
+
+/* ----------------------------------------------------------------------
+   XCFunctional implementation
+   Note: This is handled by LibXC through xc_functional.hpp
+------------------------------------------------------------------------- */
+
+// The XCFunctional implementation is handled by the xc_functional.hpp file
+
+/* ----------------------------------------------------------------------
+   DensityMatrix implementation
+------------------------------------------------------------------------- */
+
+DensityMatrix::DensityMatrix(int nbasis) : n_basis(nbasis)
+{
+  current.setZero(n_basis, n_basis);
+  previous.setZero(n_basis, n_basis);
+  difference.setZero(n_basis, n_basis);
+  
+  use_diis = true;
+  diis_size = 6;
+  
+  diis_fock.clear();
+  diis_error.clear();
+}
+
+DensityMatrix::~DensityMatrix()
+{
+}
+
+void DensityMatrix::initialize_guess(const Eigen::MatrixXd &S)
+{
+  // Simple guess: set diagonal elements proportional to overlap
+  current.setZero();
+  
+  for (int i = 0; i < n_basis; i++) {
+    current(i, i) = 1.0 / sqrt(S(i, i));
+  }
+  
+  // Normalize
+  double trace = (current * S).trace();
+  if (trace > 0) {
+    current /= trace;
+  }
+  
+  previous = current;
+}
+
+void DensityMatrix::update_from_mo(const Eigen::MatrixXd &C, int nocc)
+{
+  // Save previous density
+  previous = current;
+  
+  // Build new density matrix from occupied orbitals
+  // D = 2 * C_occ * C_occ^T for closed shell
+  current.setZero();
+  
+  for (int i = 0; i < nocc; i++) {
+    current += 2.0 * C.col(i) * C.col(i).transpose();
+  }
+  
+  // Compute difference for convergence check
+  difference = current - previous;
+}
+
+void DensityMatrix::mix_with_previous(double mixing_param)
+{
+  // Simple linear mixing for stability
+  // D_new = (1-alpha)*D_old + alpha*D_current
+  current = mixing_param * current + (1.0 - mixing_param) * previous;
+}
+
+double DensityMatrix::get_change() const
+{
+  // RMS change in density matrix
+  double sum = 0.0;
+  int count = 0;
+  
+  for (int i = 0; i < n_basis; i++) {
+    for (int j = 0; j < n_basis; j++) {
+      sum += difference(i, j) * difference(i, j);
+      count++;
+    }
+  }
+  
+  return sqrt(sum / count);
+}
+
+std::vector<double> DensityMatrix::compute_mulliken_charges(const Eigen::MatrixXd &S)
+{
+  // Mulliken population analysis
+  // q_A = Z_A - sum_mu(P_mu,mu * S_mu,mu) for mu on atom A
+  
+  // For now, return empty vector (need atom mapping)
+  std::vector<double> charges;
+  
+  // TODO: Implement with proper basis-to-atom mapping
+  
+  return charges;
+}
+
+std::vector<double> DensityMatrix::compute_lowdin_charges(const Eigen::MatrixXd &S)
+{
+  // Löwdin population analysis
+  // Uses S^(1/2) transformation
+  
+  // Compute S^(1/2)
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(S);
+  Eigen::MatrixXd S_sqrt = es.operatorSqrt();
+  
+  // Transform density matrix
+  Eigen::MatrixXd P_lowdin = S_sqrt * current * S_sqrt;
+  
+  // For now, return empty vector (need atom mapping)
+  std::vector<double> charges;
+  
+  // TODO: Implement with proper basis-to-atom mapping
+  
+  return charges;
+}
+
+void DensityMatrix::apply_diis(Eigen::MatrixXd &F)
+{
+  if (!use_diis) return;
+  
+  // DIIS (Direct Inversion of Iterative Subspace)
+  // Accelerates SCF convergence
+  
+  // Store current Fock matrix and error
+  diis_fock.push_back(F);
+  
+  // Compute error matrix: e = FDS - SDF
+  // For simplicity, using gradient of energy wrt density
+  Eigen::MatrixXd error = F * current - current * F;
+  diis_error.push_back(error);
+  
+  // Keep only last diis_size iterations
+  if (diis_fock.size() > static_cast<size_t>(diis_size)) {
+    diis_fock.erase(diis_fock.begin());
+    diis_error.erase(diis_error.begin());
+  }
+  
+  int n = diis_fock.size();
+  if (n < 2) return;  // Need at least 2 iterations
+  
+  // Build B matrix
+  Eigen::MatrixXd B(n + 1, n + 1);
+  B.setZero();
+  
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j <= i; j++) {
+      double val = (diis_error[i].cwiseProduct(diis_error[j])).sum();
+      B(i, j) = val;
+      B(j, i) = val;
+    }
+    B(i, n) = -1.0;
+    B(n, i) = -1.0;
+  }
+  B(n, n) = 0.0;
+  
+  // Solve for coefficients
+  Eigen::VectorXd rhs(n + 1);
+  rhs.setZero();
+  rhs(n) = -1.0;
+  
+  Eigen::VectorXd c = B.colPivHouseholderQr().solve(rhs);
+  
+  // Build extrapolated Fock matrix
+  F.setZero();
+  for (int i = 0; i < n; i++) {
+    F += c(i) * diis_fock[i];
+  }
+}
+
+/* ----------------------------------------------------------------------
+   GridIntegrator implementation
+------------------------------------------------------------------------- */
+
+GridIntegrator::GridIntegrator(int grid_size, const std::string &type) 
+  : target_grid_size(grid_size), grid_type(type)
+{
+  grid_points.clear();
+  grid_weights.clear();
+  becke_weights.clear();
+}
+
+GridIntegrator::~GridIntegrator()
+{
+}
+
+void GridIntegrator::generate_grid(const std::vector<std::vector<double>> &atom_positions,
+                                   const std::vector<int> &atomic_numbers)
+{
+  grid_points.clear();
+  grid_weights.clear();
+  
+  int n_atoms = atom_positions.size();
+  if (n_atoms == 0) return;
+  
+  // Generate atomic grids
+  int points_per_atom = target_grid_size / n_atoms;
+  
+  for (int atom = 0; atom < n_atoms; atom++) {
+    // Get radial and angular grid sizes
+    int n_radial = 50;  // Typical value
+    int n_angular = points_per_atom / n_radial;
+    
+    // Generate radial grid (Chebyshev-Gauss)
+    std::vector<double> r_points(n_radial);
+    std::vector<double> r_weights(n_radial);
+    generate_radial_grid(n_radial, atomic_numbers[atom], r_points, r_weights);
+    
+    // Generate angular grid (Lebedev)
+    std::vector<std::vector<double>> angular_points;
+    std::vector<double> angular_weights;
+    generate_lebedev_grid(n_angular, angular_points, angular_weights);
+    
+    // Combine radial and angular grids
+    for (int i_r = 0; i_r < n_radial; i_r++) {
+      double r = r_points[i_r];
+      double w_r = r_weights[i_r];
+      
+      for (size_t i_ang = 0; i_ang < angular_points.size(); i_ang++) {
+        std::vector<double> point(3);
+        point[0] = atom_positions[atom][0] + r * angular_points[i_ang][0];
+        point[1] = atom_positions[atom][1] + r * angular_points[i_ang][1];
+        point[2] = atom_positions[atom][2] + r * angular_points[i_ang][2];
+        
+        grid_points.push_back(point);
+        grid_weights.push_back(w_r * angular_weights[i_ang] * r * r);
+      }
+    }
+  }
+  
+  // Compute Becke partitioning weights
+  compute_becke_weights(atom_positions);
+}
+
+void GridIntegrator::generate_radial_grid(int n_points, double Z,
+                                          std::vector<double> &r,
+                                          std::vector<double> &w)
+{
+  // Chebyshev-Gauss radial grid
+  // Transform from [-1,1] to [0,inf) using appropriate mapping
+  
+  r.resize(n_points);
+  w.resize(n_points);
+  
+  // Bragg radius for scaling
+  double R_bragg = 1.0;  // Default, should depend on Z
+  if (Z > 0) {
+    R_bragg = 0.5 * (3.0 - 0.01 * Z);  // Simple approximation
+  }
+  
+  for (int i = 0; i < n_points; i++) {
+    // Chebyshev nodes
+    double xi = cos(M_PI * (i + 0.5) / n_points);
+    
+    // Becke transformation
+    double x = (1.0 + xi) / (1.0 - xi);
+    r[i] = R_bragg * x;
+    
+    // Weight includes Jacobian
+    w[i] = (M_PI / n_points) * 2.0 * R_bragg / ((1.0 - xi) * (1.0 - xi));
+  }
+}
+
+void GridIntegrator::generate_lebedev_grid(int n_points,
+                                           std::vector<std::vector<double>> &points,
+                                           std::vector<double> &weights)
+{
+  // Simplified Lebedev grid generation
+  // Real implementation would use pre-computed Lebedev grids
+  
+  points.clear();
+  weights.clear();
+  
+  // Find closest available Lebedev grid
+  // Available sizes: 6, 14, 26, 38, 50, 74, 86, 110, 146, 170, 194, ...
+  int actual_points = 50;  // Default to 50-point grid
+  
+  if (n_points <= 6) actual_points = 6;
+  else if (n_points <= 14) actual_points = 14;
+  else if (n_points <= 26) actual_points = 26;
+  else if (n_points <= 38) actual_points = 38;
+  else if (n_points <= 50) actual_points = 50;
+  else if (n_points <= 74) actual_points = 74;
+  else if (n_points <= 110) actual_points = 110;
+  else if (n_points <= 170) actual_points = 170;
+  else actual_points = 194;
+  
+  // Generate points on unit sphere
+  // This is a simplified version - real Lebedev grids are more complex
+  
+  if (actual_points == 6) {
+    // Octahedron vertices
+    points.push_back({1, 0, 0});
+    points.push_back({-1, 0, 0});
+    points.push_back({0, 1, 0});
+    points.push_back({0, -1, 0});
+    points.push_back({0, 0, 1});
+    points.push_back({0, 0, -1});
+    
+    double w = 4.0 * M_PI / 6.0;
+    for (int i = 0; i < 6; i++) {
+      weights.push_back(w);
+    }
+  } else {
+    // Use spherical Fibonacci grid as approximation
+    double phi = (1.0 + sqrt(5.0)) / 2.0;  // Golden ratio
+    
+    for (int i = 0; i < actual_points; i++) {
+      double y = 1.0 - 2.0 * i / (actual_points - 1.0);
+      double radius = sqrt(1.0 - y * y);
+      double theta = 2.0 * M_PI * i / phi;
+      
+      std::vector<double> point(3);
+      point[0] = radius * cos(theta);
+      point[1] = radius * sin(theta);
+      point[2] = y;
+      
+      points.push_back(point);
+      weights.push_back(4.0 * M_PI / actual_points);
+    }
+  }
+}
+
+void GridIntegrator::compute_becke_weights(const std::vector<std::vector<double>> &atoms)
+{
+  // Becke partitioning for multi-center integration
+  int n_points = grid_points.size();
+  int n_atoms = atoms.size();
+  
+  becke_weights.resize(n_points);
+  
+  for (int i_point = 0; i_point < n_points; i_point++) {
+    std::vector<double> P(n_atoms, 1.0);
+    
+    // Compute partition function for each atom
+    for (int i_atom = 0; i_atom < n_atoms; i_atom++) {
+      for (int j_atom = 0; j_atom < n_atoms; j_atom++) {
+        if (i_atom == j_atom) continue;
+        
+        // Distance from point to atoms i and j
+        double r_i = 0.0, r_j = 0.0;
+        for (int k = 0; k < 3; k++) {
+          double d_i = grid_points[i_point][k] - atoms[i_atom][k];
+          double d_j = grid_points[i_point][k] - atoms[j_atom][k];
+          r_i += d_i * d_i;
+          r_j += d_j * d_j;
+        }
+        r_i = sqrt(r_i);
+        r_j = sqrt(r_j);
+        
+        // Distance between atoms i and j
+        double R_ij = 0.0;
+        for (int k = 0; k < 3; k++) {
+          double d = atoms[i_atom][k] - atoms[j_atom][k];
+          R_ij += d * d;
+        }
+        R_ij = sqrt(R_ij);
+        
+        if (R_ij < 1e-10) continue;
+        
+        // Confocal elliptical coordinate
+        double mu = (r_i - r_j) / R_ij;
+        
+        // Becke's step function with smoothing
+        double f = mu;
+        for (int iter = 0; iter < 3; iter++) {
+          f = 0.5 * f * (3.0 - f * f);
+        }
+        double s = 0.5 * (1.0 - f);
+        
+        P[i_atom] *= s;
+      }
+    }
+    
+    // Normalize partition functions
+    double sum = 0.0;
+    for (int i_atom = 0; i_atom < n_atoms; i_atom++) {
+      sum += P[i_atom];
+    }
+    
+    if (sum > 1e-15) {
+      // For simplicity, assign full weight to nearest atom
+      // Real implementation would properly partition weights
+      becke_weights[i_point] = 1.0;
+    } else {
+      becke_weights[i_point] = 0.0;
+    }
+  }
+}
+
+void GridIntegrator::integrate_xc(XCFunctional *xc_func,
+                                  const Eigen::MatrixXd &density_matrix,
+                                  BasisSetManager *basis,
+                                  double &exc_energy,
+                                  Eigen::MatrixXd &vxc_matrix)
+{
+  int n_basis = basis->get_n_basis();
+  int n_points = grid_points.size();
+  
+  vxc_matrix.setZero(n_basis, n_basis);
+  exc_energy = 0.0;
+  
+  if (n_points == 0) return;
+  
+  // Evaluate basis functions at grid points
+  std::vector<std::vector<double>> basis_values(n_points, std::vector<double>(n_basis));
+  std::vector<std::vector<std::vector<double>>> basis_gradients;
+  
+  if (xc_func->is_gga() || xc_func->is_meta()) {
+    basis_gradients.resize(n_points, 
+                          std::vector<std::vector<double>>(n_basis, 
+                                                          std::vector<double>(3)));
+  }
+  
+  evaluate_basis_at_points(basis, basis_values, basis_gradients);
+  
+  // Compute density and gradients at grid points
+  std::vector<double> rho(n_points, 0.0);
+  std::vector<double> sigma(n_points, 0.0);  // |grad rho|^2
+  std::vector<double> lapl(n_points, 0.0);   // Laplacian
+  std::vector<double> tau(n_points, 0.0);     // Kinetic energy density
+  
+  for (int i_point = 0; i_point < n_points; i_point++) {
+    // Density
+    for (int i = 0; i < n_basis; i++) {
+      for (int j = 0; j < n_basis; j++) {
+        rho[i_point] += density_matrix(i, j) * 
+                        basis_values[i_point][i] * 
+                        basis_values[i_point][j];
+      }
+    }
+    
+    // Gradient and kinetic energy density for GGA/meta-GGA
+    if (xc_func->is_gga() || xc_func->is_meta()) {
+      std::vector<double> grad_rho(3, 0.0);
+      
+      for (int i = 0; i < n_basis; i++) {
+        for (int j = 0; j < n_basis; j++) {
+          double P_ij = density_matrix(i, j);
+          
+          for (int k = 0; k < 3; k++) {
+            grad_rho[k] += P_ij * (basis_gradients[i_point][i][k] * basis_values[i_point][j] +
+                                   basis_values[i_point][i] * basis_gradients[i_point][j][k]);
+          }
+          
+          if (xc_func->is_meta()) {
+            for (int k = 0; k < 3; k++) {
+              tau[i_point] += 0.5 * P_ij * 
+                             basis_gradients[i_point][i][k] * 
+                             basis_gradients[i_point][j][k];
+            }
+          }
+        }
+      }
+      
+      sigma[i_point] = grad_rho[0] * grad_rho[0] + 
+                       grad_rho[1] * grad_rho[1] + 
+                       grad_rho[2] * grad_rho[2];
+    }
+  }
+  
+  // Evaluate XC functional
+  std::vector<double> exc(n_points);
+  std::vector<double> vrho(n_points);
+  std::vector<double> vsigma(n_points);
+  std::vector<double> vlapl(n_points);
+  std::vector<double> vtau(n_points);
+  
+  xc_func->evaluate(rho, sigma, lapl, tau, exc, vrho, vsigma, vlapl, vtau);
+  
+  // Integrate XC energy
+  for (int i_point = 0; i_point < n_points; i_point++) {
+    exc_energy += exc[i_point] * rho[i_point] * 
+                  grid_weights[i_point] * becke_weights[i_point];
+  }
+  
+  // Build XC potential matrix
+  for (int i_point = 0; i_point < n_points; i_point++) {
+    double w = grid_weights[i_point] * becke_weights[i_point];
+    
+    // LDA contribution
+    for (int i = 0; i < n_basis; i++) {
+      for (int j = 0; j <= i; j++) {
+        double val = vrho[i_point] * basis_values[i_point][i] * 
+                    basis_values[i_point][j] * w;
+        vxc_matrix(i, j) += val;
+        if (i != j) vxc_matrix(j, i) += val;
+      }
+    }
+    
+    // GGA contribution
+    if (xc_func->is_gga() && vsigma[i_point] != 0.0) {
+      // Simplified - full implementation would include gradient contributions
+      // This requires second derivatives of basis functions
+    }
+    
+    // Meta-GGA contribution
+    if (xc_func->is_meta() && vtau[i_point] != 0.0) {
+      // Simplified - full implementation would include tau contributions
+    }
+  }
+}
+
+void GridIntegrator::evaluate_basis_at_points(BasisSetManager *basis,
+                                              std::vector<std::vector<double>> &basis_values,
+                                              std::vector<std::vector<std::vector<double>>> &basis_gradients)
+{
+  int n_points = grid_points.size();
+  int n_basis = basis->get_n_basis();
+  
+  // For each grid point, evaluate all basis functions
+  for (int i_point = 0; i_point < n_points; i_point++) {
+    basis->evaluate_basis(grid_points[i_point][0], 
+                         grid_points[i_point][1], 
+                         grid_points[i_point][2],
+                         basis_values[i_point]);
+    
+    if (!basis_gradients.empty()) {
+      std::vector<double> dummy_values;
+      basis->evaluate_basis_gradient(grid_points[i_point][0], 
+                                     grid_points[i_point][1], 
+                                     grid_points[i_point][2],
+                                     dummy_values,
+                                     basis_gradients[i_point]);
+    }
+  }
 }

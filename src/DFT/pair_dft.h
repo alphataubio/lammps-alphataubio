@@ -30,6 +30,11 @@ PairStyle(dft,PairDFT);
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
 
+// Include the modular component headers
+#include "basis_manager.hpp"
+#include "integral_engine.hpp"
+#include "xc_functional.hpp"
+
 // Forward declarations
 namespace libint2 {
   class BasisSet;
@@ -38,12 +43,8 @@ namespace libint2 {
 
 namespace LAMMPS_NS {
 
-// Forward declare the modular components
-class BasisSetManager;
-class IntegralEngine;
-class DensityMatrix;
-class XCFunctional;
-class GridIntegrator;
+// Forward declare additional components
+// These will be defined below after the PairDFT class
 
 class PairDFT : public Pair {
  public:
@@ -168,10 +169,6 @@ class PairDFT : public Pair {
   void evaluate_xc_functional();
   void compute_xc_potential();
   void compute_exact_exchange();
-  void evaluate_wb97mv_functional();  // Special implementation for wB97M-V
-  void compute_vv10_nlc(const std::vector<double> &rho,
-                        const std::vector<double> &sigma,
-                        double b, double C);  // VV10 non-local correlation
   
   // Grid integration methods
   void generate_integration_grid();
@@ -215,65 +212,6 @@ class PairDFT : public Pair {
   void cleanup_integrals();
 };
 
-// Basis Set Manager Class
-class BasisSetManager {
- public:
-  BasisSetManager();
-  ~BasisSetManager();
-  
-  void load_from_json(const std::string &filename);
-  void load_from_bse(const std::string &basis_name, const std::vector<int> &atomic_numbers);
-  
-  int get_n_basis() const { return n_basis_functions; }
-  int get_n_shells() const { return n_shells; }
-  
-  // Access basis function information
-  std::vector<double> get_exponents(int shell) const;
-  std::vector<double> get_coefficients(int shell) const;
-  int get_angular_momentum(int shell) const;
-  std::vector<int> get_shell_to_atom_map() const { return shell_to_atom; }
-  
- private:
-  int n_basis_functions;
-  int n_shells;
-  std::vector<int> shell_to_atom;
-  std::vector<int> angular_momentum;
-  std::vector<std::vector<double>> exponents;
-  std::vector<std::vector<double>> coefficients;
-  std::vector<std::vector<double>> normalized_coefficients;
-  
-  void normalize_basis_functions();
-  double compute_normalization(int l, double exponent);
-};
-
-// Integral Engine Class
-class IntegralEngine {
- public:
-  IntegralEngine(BasisSetManager *basis);
-  ~IntegralEngine();
-  
-  void compute_overlap(Eigen::MatrixXd &S);
-  void compute_kinetic(Eigen::MatrixXd &T);
-  void compute_nuclear(Eigen::MatrixXd &V, const std::vector<double> &charges,
-                       const std::vector<std::vector<double>> &positions);
-  void compute_eri(std::vector<double> &eri_tensor);
-  void compute_eri_with_density(const Eigen::MatrixXd &D, 
-                                Eigen::MatrixXd &J, Eigen::MatrixXd &K);
-  
-  // Gradient integrals for forces
-  void compute_overlap_gradient(std::vector<Eigen::MatrixXd> &dS);
-  void compute_kinetic_gradient(std::vector<Eigen::MatrixXd> &dT);
-  void compute_nuclear_gradient(std::vector<Eigen::MatrixXd> &dV);
-  
- private:
-  BasisSetManager *basis_set;
-  std::unique_ptr<libint2::BasisSet> libint_basis;
-  std::vector<std::unique_ptr<libint2::Engine>> engines;
-  
-  void initialize_libint();
-  void cleanup_libint();
-};
-
 // Density Matrix Manager
 class DensityMatrix {
  public:
@@ -291,6 +229,7 @@ class DensityMatrix {
   // Density analysis
   std::vector<double> compute_mulliken_charges(const Eigen::MatrixXd &S);
   std::vector<double> compute_lowdin_charges(const Eigen::MatrixXd &S);
+  void apply_diis(Eigen::MatrixXd &F);
   
  private:
   int n_basis;
@@ -303,57 +242,6 @@ class DensityMatrix {
   int diis_size;
   std::vector<Eigen::MatrixXd> diis_fock;
   std::vector<Eigen::MatrixXd> diis_error;
-  void apply_diis(Eigen::MatrixXd &F);
-};
-
-// XC Functional Wrapper
-class XCFunctional {
- public:
-  XCFunctional(const std::string &name);
-  ~XCFunctional();
-  
-  void evaluate(const std::vector<double> &rho,
-               const std::vector<double> &sigma,  // |grad rho|^2
-               const std::vector<double> &lapl,   // laplacian
-               const std::vector<double> &tau,    // kinetic density
-               std::vector<double> &exc,
-               std::vector<double> &vrho,
-               std::vector<double> &vsigma,
-               std::vector<double> &vlapl,
-               std::vector<double> &vtau);
-  
-  bool is_gga() const { return is_gga_functional; }
-  bool is_meta() const { return is_meta_functional; }
-  bool is_hybrid() const { return is_hybrid_functional; }
-  bool is_range_separated() const { return is_rs_functional; }
-  
-  double get_exact_exchange_fraction() const { return exx_fraction; }
-  double get_range_separation_omega() const { return omega; }
-  
-  // Special implementations for complex functionals
-  void evaluate_wb97mv(const std::vector<double> &rho,
-                       const std::vector<double> &sigma,
-                       std::vector<double> &exc,
-                       std::vector<double> &vrho,
-                       std::vector<double> &vsigma);
-  
- private:
-  xc_func_type *func_x;
-  xc_func_type *func_c;
-  xc_func_type *func_xc;
-  
-  bool is_gga_functional;
-  bool is_meta_functional;
-  bool is_hybrid_functional;
-  bool is_rs_functional;
-  
-  double exx_fraction;
-  double omega;
-  
-  std::string functional_name;
-  
-  void initialize_functional(const std::string &name);
-  void parse_functional_string(const std::string &name);
 };
 
 // Grid Integration Class
