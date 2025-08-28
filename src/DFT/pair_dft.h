@@ -44,7 +44,8 @@ namespace libint2 {
 namespace LAMMPS_NS {
 
 // Forward declare additional components
-// These will be defined below after the PairDFT class
+class DensityMatrix;
+class GridIntegrator;
 
 class PairDFT : public Pair {
  public:
