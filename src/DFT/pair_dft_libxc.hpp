@@ -41,10 +41,7 @@
 #define XC_HYB_GGA_XC_B3LYP 402
 #endif
 
-
-using namespace LAMMPS_NS;
-
-/* ---------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- 
 
 XCFunctional::XCFunctional(const std::string &name) : functional_name(name)
 {
@@ -63,8 +60,6 @@ XCFunctional::XCFunctional(const std::string &name) : functional_name(name)
   initialize_functional(name);
 }
 
-/* ---------------------------------------------------------------------- */
-
 XCFunctional::~XCFunctional()
 {
   if (func_x) {
@@ -80,6 +75,8 @@ XCFunctional::~XCFunctional()
     delete func_xc;
   }
 }
+
+*/
 
 /* ----------------------------------------------------------------------
    parse functional name to LibXC ID
@@ -137,27 +134,6 @@ void PairDFT::parse_functional_name(const char *name)
     }
     return;
   }
-  else if (func_str == "LDA") {
-    // LDA = Slater exchange + PW correlation
-    use_combined_xc = false;
-    xc_functional_x = XC_LDA_X;     // ID 1
-    xc_functional_c = XC_LDA_C_PW;  // ID 12
-    
-    xc_func_x = new xc_func_type;
-    xc_func_c = new xc_func_type;
-    
-    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize LDA exchange functional");
-    }
-    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize LDA correlation functional");
-    }
-    
-    if (comm->me == 0) {
-      utils::logmesg(lmp, "DFT: Using LDA functional\n");
-    }
-    return;
-  }
   else if (func_str == "B3LYP") {
     // B3LYP is a combined hybrid functional
     use_combined_xc = true;
@@ -195,94 +171,6 @@ void PairDFT::parse_functional_name(const char *name)
     if (comm->me == 0) {
       utils::logmesg(lmp, fmt::format("DFT: Using PBE0 hybrid functional ({}% HF exchange)\n", 
                                       hybrid_coeff * 100));
-    }
-    return;
-  }
-  else if (func_str == "BP86") {
-    // BP86 = B88 exchange + P86 correlation
-    use_combined_xc = false;
-    xc_functional_x = XC_GGA_X_B88;   // ID 106
-    xc_functional_c = 132;  // XC_GGA_C_P86
-    
-    xc_func_x = new xc_func_type;
-    xc_func_c = new xc_func_type;
-    
-    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize B88 exchange functional");
-    }
-    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize P86 correlation functional");
-    }
-    
-    if (comm->me == 0) {
-      utils::logmesg(lmp, "DFT: Using BP86 functional (GGA)\n");
-    }
-    return;
-  }
-  else if (func_str == "TPSS") {
-    // TPSS = TPSS exchange + TPSS correlation
-    use_combined_xc = false;
-    xc_functional_x = 202;  // XC_MGGA_X_TPSS
-    xc_functional_c = 231;  // XC_MGGA_C_TPSS
-    
-    xc_func_x = new xc_func_type;
-    xc_func_c = new xc_func_type;
-    
-    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize TPSS exchange functional");
-    }
-    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize TPSS correlation functional");
-    }
-    
-    is_meta_gga = true;
-    
-    if (comm->me == 0) {
-      utils::logmesg(lmp, "DFT: Using TPSS functional (meta-GGA)\n");
-    }
-    return;
-  }
-  else if (func_str == "SCAN") {
-    // SCAN = SCAN exchange + SCAN correlation
-    use_combined_xc = false;
-    xc_functional_x = 263;  // XC_MGGA_X_SCAN
-    xc_functional_c = 267;  // XC_MGGA_C_SCAN
-    
-    xc_func_x = new xc_func_type;
-    xc_func_c = new xc_func_type;
-    
-    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize SCAN exchange functional");
-    }
-    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize SCAN correlation functional");
-    }
-    
-    is_meta_gga = true;
-    
-    if (comm->me == 0) {
-      utils::logmesg(lmp, "DFT: Using SCAN functional (meta-GGA)\n");
-    }
-    return;
-  }
-  else if (func_str == "BLYP") {
-    // BLYP = B88 exchange + LYP correlation  
-    use_combined_xc = false;
-    xc_functional_x = XC_GGA_X_B88;  // ID 106
-    xc_functional_c = XC_GGA_C_LYP;  // ID 131
-    
-    xc_func_x = new xc_func_type;
-    xc_func_c = new xc_func_type;
-    
-    if (xc_func_init(xc_func_x, xc_functional_x, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize B88 exchange functional");
-    }
-    if (xc_func_init(xc_func_c, xc_functional_c, XC_UNPOLARIZED) != 0) {
-      error->all(FLERR, "Failed to initialize LYP correlation functional");
-    }
-    
-    if (comm->me == 0) {
-      utils::logmesg(lmp, "DFT: Using BLYP functional (GGA)\n");
     }
     return;
   }
@@ -356,18 +244,8 @@ void PairDFT::parse_functional_name(const char *name)
 
 /* ---------------------------------------------------------------------- */
 
-void XCFunctional::initialize_functional(const std::string &name)
+void PairDFT::initialize_functional(const std::string &name)
 {
-  // Special case for wB97M-V
-  if (name == "wB97M-V" || name == "wb97mv" || name == "wB97MV") {
-    // wB97M-V requires special implementation
-    is_rs_functional = true;
-    is_meta_functional = true;
-    is_hybrid_functional = true;
-    omega = 0.3;
-    exx_fraction = 0.15;  // Short-range fraction
-    return;
-  }
   
   // Check if it's a combined functional or separate X+C
   if (name.find('+') != std::string::npos) {
@@ -422,7 +300,7 @@ void XCFunctional::initialize_functional(const std::string &name)
 
 /* ---------------------------------------------------------------------- */
 
-void XCFunctional::parse_functional_string(const std::string &name)
+void PairDFT::parse_functional_string(const std::string &name)
 {
   // Parse "X_FUNC+C_FUNC" format
   size_t plus_pos = name.find('+');
@@ -482,7 +360,7 @@ void XCFunctional::parse_functional_string(const std::string &name)
 
 /* ---------------------------------------------------------------------- */
 
-void XCFunctional::evaluate(const std::vector<double> &rho,
+void PairDFT::evaluate(const std::vector<double> &rho,
                            const std::vector<double> &sigma,
                            const std::vector<double> &lapl,
                            const std::vector<double> &tau,
@@ -501,12 +379,6 @@ void XCFunctional::evaluate(const std::vector<double> &rho,
   if (is_meta_functional) {
     vlapl.resize(n);
     vtau.resize(n);
-  }
-  
-  // Special case for wB97M-V
-  if (functional_name == "wB97M-V" || functional_name == "wb97mv") {
-    evaluate_wb97mv(rho, sigma, exc, vrho, vsigma);
-    return;
   }
   
   // Standard LibXC evaluation
@@ -571,9 +443,7 @@ void XCFunctional::evaluate(const std::vector<double> &rho,
     for (int i = 0; i < n; i++) {
       exc[i] = ex[i] + ec[i];
       vrho[i] = vx_rho[i] + vc_rho[i];
-      if (is_gga_functional) {
-        vsigma[i] = vx_sigma[i] + vc_sigma[i];
-      }
+      if (is_gga_functional) vsigma[i] = vx_sigma[i] + vc_sigma[i];
       if (is_meta_functional) {
         vlapl[i] = vx_lapl[i] + vc_lapl[i];
         vtau[i] = vx_tau[i] + vc_tau[i];

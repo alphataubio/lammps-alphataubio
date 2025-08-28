@@ -14,23 +14,30 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
-#include <nlohmann/json.hpp>
 
-using namespace LAMMPS_NS;
-using json = nlohmann_lmp::json;
+#include "json.h"
 
 /* ---------------------------------------------------------------------- */
 
-BasisSetManager::BasisSetManager()
-{
-  n_basis_functions = 0;
-  n_shells = 0;
-}
+void PairDFT::load_basis_from_json(const std::string &filename) {
 
-/* ---------------------------------------------------------------------- */
+  if (comm->me == 0) {
+    fp = fopen(filename.c_str(), "r");
+    if (fp == nullptr)
+      error->one(FLERR, fileiarg, "Cannot open basis set file {}: {}", filename, utils::getsyserror());
+    try {
+      // try to parse as a JSON file. parser throws an exception on errors
+      // if successful, temporarily serialize to bytearray for communication
+      moldata = json::parse(fp);
+      jsondata = json::to_ubjson(moldata);
+      jsondata_size = jsondata.size();
+      fclose(fp);
+    } catch (std::exception &e) {
+      fclose(fp);
+      error->one(FLERR, fileiarg, "Error parsing JSON file {}: {}", filename, e.what());
+    }
+  }
 
-void PairDFT::load_basis_from_json(const std::string &filename)
-{
   std::ifstream file(filename);
   if (!file.is_open()) {
     throw std::runtime_error("Cannot open basis set file: " + filename);
@@ -113,30 +120,59 @@ void PairDFT::load_basis_from_json(const std::string &filename)
   normalize_basis_functions();
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Initialize basis set from JSON file
+------------------------------------------------------------------------- */
 
-void BasisSetManager::load_from_bse(const std::string &basis_name, 
-                                    const std::vector<int> &atomic_numbers)
+void PairDFT::initialize_basis_set()
 {
-  // This would require calling the basis set exchange API
-  // For now, redirect to JSON file
-  std::string filename = basis_name + ".json";
-  load_from_json(filename);
+  // Create modular components
+  basis_manager = std::make_unique<BasisSetManager>();
+  basis_manager->load_from_json(basis_file);
+  
+  n_basis_functions = basis_manager->get_n_basis();
+  
+  // Initialize integral engine
+  integral_engine = std::make_unique<IntegralEngine>(basis_manager.get());
+  
+  // Initialize density matrix
+  density_matrix = std::make_unique<DensityMatrix>(n_basis_functions);
+  
+  // Initialize XC functional
+  xc_functional = std::make_unique<XCFunctional>(functional_name);
+  
+  // Initialize grid integrator
+  grid_integrator = std::make_unique<GridIntegrator>(grid_size, grid_type);
+  
+  // Allocate matrices
+  overlap_matrix.resize(n_basis_functions, n_basis_functions);
+  kinetic_matrix.resize(n_basis_functions, n_basis_functions);
+  nuclear_matrix.resize(n_basis_functions, n_basis_functions);
+  coulomb_matrix.resize(n_basis_functions, n_basis_functions);
+  exchange_matrix.resize(n_basis_functions, n_basis_functions);
+  fock_matrix.resize(n_basis_functions, n_basis_functions);
+  density_matrix_eigen.resize(n_basis_functions, n_basis_functions);
+  mo_coefficients.resize(n_basis_functions, n_basis_functions);
+  mo_energies.resize(n_basis_functions);
+  
+  // Compute one-electron integrals
+  compute_one_electron_integrals();
+  
+  // Initialize density guess
+  initialize_density_guess();
 }
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<double> BasisSetManager::get_exponents(int shell) const
+std::vector<double> PairDFT::get_exponents(int shell) const
 {
-  if (shell < 0 || shell >= n_shells) {
-    return std::vector<double>();
-  }
+  if (shell < 0 || shell >= n_shells) return std::vector<double>();
   return exponents[shell];
 }
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<double> BasisSetManager::get_coefficients(int shell) const
+std::vector<double> PairDFT::get_coefficients(int shell) const
 {
   if (shell < 0 || shell >= n_shells) {
     return std::vector<double>();
@@ -146,7 +182,7 @@ std::vector<double> BasisSetManager::get_coefficients(int shell) const
 
 /* ---------------------------------------------------------------------- */
 
-int BasisSetManager::get_angular_momentum(int shell) const
+int PairDFT::get_angular_momentum(int shell) const
 {
   if (shell < 0 || shell >= n_shells) {
     return -1;
@@ -156,7 +192,7 @@ int BasisSetManager::get_angular_momentum(int shell) const
 
 /* ---------------------------------------------------------------------- */
 
-void BasisSetManager::normalize_basis_functions()
+void PairDFT::normalize_basis_functions()
 {
   normalized_coefficients.clear();
   
@@ -177,7 +213,7 @@ void BasisSetManager::normalize_basis_functions()
 
 /* ---------------------------------------------------------------------- */
 
-double BasisSetManager::compute_normalization(int l, double exponent)
+double PairDFT::compute_normalization(int l, double exponent)
 {
   // Normalization constant for Gaussian basis function
   // N = (2*alpha/pi)^(3/4) * sqrt((8*alpha)^l * (2l-1)!! / (2l+1)!!)

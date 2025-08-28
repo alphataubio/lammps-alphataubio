@@ -24,9 +24,6 @@ PairStyle(dft,PairDFT);
 
 namespace LAMMPS_NS {
 
-// Forward declare additional components
-// These will be defined below after the PairDFT class
-
 class PairDFT : public Pair {
  public:
   PairDFT(class LAMMPS *);
@@ -35,19 +32,16 @@ class PairDFT : public Pair {
   void settings(int, char **) override;
   void coeff(int, char **) override;
   void init_style() override;
-  double init_one(int, int) override;
-  
 
  protected:
- 
-#include "pair_dft_basis.hpp"
-#include "pair_dft_libxc.hpp"
-#include "pair_dft_libint2.hpp"
-#include "pair_dft_scf.hpp"
+
+};
+
 
  
  // *** FIXME EVERYTHING BELOW THIS NEEDS TO BE REFACTORED TO THE PROPER .HPP ***
  
+/*
  #include <vector>
 #include <map>
 #include <memory>
@@ -56,10 +50,6 @@ class PairDFT : public Pair {
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
 
-// Include the modular component headers
-#include "basis_manager.hpp"
-#include "integral_engine.hpp"
-#include "xc_functional.hpp"
 
 // Forward declarations
 namespace libint2 {
@@ -216,12 +206,7 @@ class DensityMatrix {
   const Eigen::MatrixXd& get_current() const { return current; }
   const Eigen::MatrixXd& get_previous() const { return previous; }
   double get_change() const;
-  
-  // Density analysis
-  std::vector<double> compute_mulliken_charges(const Eigen::MatrixXd &S);
-  std::vector<double> compute_lowdin_charges(const Eigen::MatrixXd &S);
-  void apply_diis(Eigen::MatrixXd &F);
-  
+    
  private:
   int n_basis;
   Eigen::MatrixXd current;
@@ -274,6 +259,8 @@ class GridIntegrator {
                                 std::vector<std::vector<double>> &basis_values,
                                 std::vector<std::vector<std::vector<double>>> &basis_gradients);
 };
+
+*/
 
 }    // namespace LAMMPS_NS
 

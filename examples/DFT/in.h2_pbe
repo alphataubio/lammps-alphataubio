@@ -13,7 +13,7 @@ mass            1 1.00794
 # --- DFT setup (LibXC/libint2) ---
 # Basis JSON must include H shells in BSE JSON format
 pair_style      dft PBE def2-svp.H.json grid 50000 tol 1e-9 maxiter 150
-pair_coeff      1 1 1.0 1.20   # H: Z=1, vdW~1.2 Å
+pair_coeff      * *
 
 neighbor        2.0 bin
 neigh_modify    delay 0 every 1

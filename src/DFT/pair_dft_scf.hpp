@@ -18,29 +18,117 @@
 
 using namespace LAMMPS_NS;
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Perform SCF calculation
+------------------------------------------------------------------------- */
 
-GridIntegrator::GridIntegrator(int grid_size, const std::string &type) 
-  : target_grid_size(grid_size), grid_type(type)
+void PairDFT::perform_scf()
 {
-  grid_points.clear();
-  grid_weights.clear();
-  becke_weights.clear();
+  print_scf_header();
+  
+  double prev_energy = 0.0;
+  scf_converged = false;
+  
+  for (current_iteration = 1; current_iteration <= max_scf_iterations; current_iteration++) {
+    // Build Fock matrix
+    build_fock_matrix();
+    
+    // Solve Roothaan-Hall equations
+    solve_roothaan_hall();
+    
+    // Update density matrix
+    compute_density_matrix();
+    
+    // Mix with previous density for better convergence
+    if (current_iteration > 1) {
+      density_matrix->mix_with_previous(0.5);
+    }
+    
+    // Compute energy
+    compute_energy();
+    
+    // Check convergence
+    double energy_change = std::abs(total_dft_energy - prev_energy);
+    double density_change = density_matrix->get_change();
+    
+    print_scf_iteration();
+    
+    if (energy_change < energy_tolerance && density_change < density_tolerance) {
+      scf_converged = true;
+      break;
+    }
+    
+    prev_energy = total_dft_energy;
+  }
+  
+  if (!scf_converged && comm->me == 0) {
+    error->warning(FLERR, "SCF did not converge within maximum iterations");
+  }
+  
+  print_scf_summary();
+}
+
+
+/* ----------------------------------------------------------------------
+   SCF output methods
+------------------------------------------------------------------------- */
+
+void PairDFT::print_scf_header()
+{
+  if (comm->me == 0) {
+    utils::logmesg(lmp, "\n");
+    utils::logmesg(lmp, "================================================\n");
+    utils::logmesg(lmp, "            DFT SCF CALCULATION\n");
+    utils::logmesg(lmp, "================================================\n");
+    utils::logmesg(lmp, fmt::format("Functional: {}\n", functional_name));
+    utils::logmesg(lmp, fmt::format("Basis functions: {}\n", n_basis_functions));
+    utils::logmesg(lmp, fmt::format("Electrons: {}\n", n_electrons));
+    utils::logmesg(lmp, fmt::format("Grid points: {}\n", grid_size));
+    utils::logmesg(lmp, "------------------------------------------------\n");
+    utils::logmesg(lmp, " Iter    Energy         Delta E      RMS Dens\n");
+    utils::logmesg(lmp, "------------------------------------------------\n");
+  }
+}
+
+void PairDFT::print_scf_iteration()
+{
+  if (comm->me == 0) {
+    double density_change = density_matrix->get_change();
+    double energy_change = (current_iteration == 1) ? 0.0 : 
+                          total_dft_energy - ((current_iteration > 1) ? total_dft_energy : 0.0);
+    
+    utils::logmesg(lmp, fmt::format("{:4d} {:15.8f} {:12.5e} {:12.5e}\n",
+                                    current_iteration, total_dft_energy,
+                                    energy_change, density_change));
+  }
+}
+
+void PairDFT::print_scf_summary()
+{
+  if (comm->me == 0) {
+    utils::logmesg(lmp, "------------------------------------------------\n");
+    if (scf_converged) {
+      utils::logmesg(lmp, "SCF CONVERGED\n");
+    } else {
+      utils::logmesg(lmp, "SCF NOT CONVERGED\n");
+    }
+    utils::logmesg(lmp, "\nEnergy Components:\n");
+    utils::logmesg(lmp, fmt::format("  Kinetic:         {:15.8f}\n", kinetic_energy));
+    utils::logmesg(lmp, fmt::format("  Nuclear:         {:15.8f}\n", nuclear_repulsion));
+    utils::logmesg(lmp, fmt::format("  XC:              {:15.8f}\n", xc_energy));
+    utils::logmesg(lmp, fmt::format("  TOTAL:           {:15.8f}\n", total_dft_energy));
+    utils::logmesg(lmp, "================================================\n\n");
+  }
 }
 
 /* ---------------------------------------------------------------------- */
 
-GridIntegrator::~GridIntegrator()
-{
-}
-
-/* ---------------------------------------------------------------------- */
-
-void GridIntegrator::generate_grid(const std::vector<std::vector<double>> &atom_positions,
+void PairDFT::generate_grid(const std::vector<std::vector<double>> &atom_positions,
                                    const std::vector<int> &atomic_numbers)
 {
   grid_points.clear();
   grid_weights.clear();
+  becke_weights.clear();
   
   int n_atoms = atom_positions.size();
   if (n_atoms == 0) return;
@@ -86,7 +174,7 @@ void GridIntegrator::generate_grid(const std::vector<std::vector<double>> &atom_
 
 /* ---------------------------------------------------------------------- */
 
-void GridIntegrator::generate_radial_grid(int n_points, double Z,
+void PairDFT::generate_radial_grid(int n_points, double Z,
                                           std::vector<double> &r,
                                           std::vector<double> &w)
 {
@@ -117,7 +205,7 @@ void GridIntegrator::generate_radial_grid(int n_points, double Z,
 
 /* ---------------------------------------------------------------------- */
 
-void GridIntegrator::generate_lebedev_grid(int n_points,
+void PairDFT::generate_lebedev_grid(int n_points,
                                            std::vector<std::vector<double>> &points,
                                            std::vector<double> &weights)
 {
@@ -179,7 +267,7 @@ void GridIntegrator::generate_lebedev_grid(int n_points,
 
 /* ---------------------------------------------------------------------- */
 
-void GridIntegrator::compute_becke_weights(const std::vector<std::vector<double>> &atoms)
+void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atoms)
 {
   // Becke partitioning for multi-center integration
   int n_points = grid_points.size();
@@ -248,7 +336,7 @@ void GridIntegrator::compute_becke_weights(const std::vector<std::vector<double>
 
 /* ---------------------------------------------------------------------- */
 
-void GridIntegrator::integrate_xc(XCFunctional *xc_func,
+void PairDFT::integrate_xc(XCFunctional *xc_func,
                                   const Eigen::MatrixXd &density_matrix,
                                   BasisSetManager *basis,
                                   double &exc_energy,
@@ -363,7 +451,7 @@ void GridIntegrator::integrate_xc(XCFunctional *xc_func,
 
 /* ---------------------------------------------------------------------- */
 
-void GridIntegrator::evaluate_basis_at_points(BasisSetManager *basis,
+void PairDFT::evaluate_basis_at_points(BasisSetManager *basis,
                                               std::vector<std::vector<double>> &basis_values,
                                               std::vector<std::vector<std::vector<double>>> &basis_gradients)
 {
