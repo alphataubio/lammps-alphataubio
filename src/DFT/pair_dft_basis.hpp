@@ -11,12 +11,6 @@
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
-#include "pair_dft.h"
-#include "error.h"
-#include "comm.h"
-#include "memory.h"
-#include "utils.h"
-
 #include <fstream>
 #include <iostream>
 #include <cmath>
@@ -35,13 +29,7 @@ BasisSetManager::BasisSetManager()
 
 /* ---------------------------------------------------------------------- */
 
-BasisSetManager::~BasisSetManager()
-{
-}
-
-/* ---------------------------------------------------------------------- */
-
-void BasisSetManager::load_from_json(const std::string &filename)
+void PairDFT::load_basis_from_json(const std::string &filename)
 {
   std::ifstream file(filename);
   if (!file.is_open()) {

@@ -21,8 +21,34 @@ PairStyle(dft,PairDFT);
 #define LMP_PAIR_DFT_H
 
 #include "pair.h"
-#include <xc.h>
-#include <vector>
+
+namespace LAMMPS_NS {
+
+// Forward declare additional components
+// These will be defined below after the PairDFT class
+
+class PairDFT : public Pair {
+ public:
+  PairDFT(class LAMMPS *);
+  ~PairDFT() override;
+  void compute(int, int) override;
+  void settings(int, char **) override;
+  void coeff(int, char **) override;
+  void init_style() override;
+  double init_one(int, int) override;
+  
+
+ protected:
+ 
+#include "pair_dft_basis.hpp"
+#include "pair_dft_libxc.hpp"
+#include "pair_dft_libint2.hpp"
+#include "pair_dft_scf.hpp"
+
+ 
+ // *** FIXME EVERYTHING BELOW THIS NEEDS TO BE REFACTORED TO THE PROPER .HPP ***
+ 
+ #include <vector>
 #include <map>
 #include <memory>
 #include <string>
@@ -41,27 +67,7 @@ namespace libint2 {
   class Engine;
 }
 
-namespace LAMMPS_NS {
 
-// Forward declare additional components
-// These will be defined below after the PairDFT class
-
-class PairDFT : public Pair {
- public:
-  PairDFT(class LAMMPS *);
-  ~PairDFT() override;
-  void compute(int, int) override;
-  void settings(int, char **) override;
-  void coeff(int, char **) override;
-  void init_style() override;
-  double init_one(int, int) override;
-  void write_restart(FILE *) override;
-  void read_restart(FILE *) override;
-  void write_restart_settings(FILE *) override;
-  void read_restart_settings(FILE *) override;
-  void write_data(FILE *) override;
-  void write_data_all(FILE *) override;
-  
   // DFT-specific public methods
   void set_convergence_criteria(double energy_tol, double density_tol, int max_iter);
   double get_total_energy() const { return total_dft_energy; }
@@ -69,7 +75,6 @@ class PairDFT : public Pair {
   double get_kinetic_energy() const { return kinetic_energy; }
   double get_nuclear_repulsion() const { return nuclear_repulsion; }
 
- protected:
   double cut_global;
   double **cut;
   double **offset;
@@ -149,12 +154,7 @@ class PairDFT : public Pair {
   // Atom-specific parameters
   double **atomic_charges;       // Nuclear charges for each atom type
   double **vdw_radii;            // van der Waals radii for dispersion
-  
-  // Dispersion correction parameters
-  bool use_dispersion;
-  std::string dispersion_type;   // "D3", "D3BJ", "D4"
-  double dispersion_energy;
-  
+    
   // Methods for DFT calculations
   void initialize_basis_set();
   void compute_one_electron_integrals();
@@ -194,12 +194,6 @@ class PairDFT : public Pair {
   bool check_convergence();
   void mix_density(double mixing_param);
   
-  // Dispersion correction methods
-  void compute_dispersion_correction();
-  void compute_d3_dispersion();
-  void compute_d3bj_dispersion();
-  void compute_d4_dispersion();
-  
   // Output and debugging
   void print_scf_header();
   void print_scf_iteration();
@@ -207,9 +201,6 @@ class PairDFT : public Pair {
   void write_molecular_orbitals(const char *filename);
   void write_density_cube(const char *filename);
   
-  // Memory management
-  void cleanup_libxc();
-  void cleanup_integrals();
 };
 
 // Density Matrix Manager
