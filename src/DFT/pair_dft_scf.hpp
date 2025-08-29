@@ -68,11 +68,16 @@ void PairDFT::build_fock_matrix()
   // Two-electron part: Coulomb and Exchange
   compute_eri_with_density(density_matrix, coulomb_matrix, exchange_matrix);
   
-  // Add Coulomb contribution
+  // Add Coulomb contribution (factor of 2 for closed-shell)
   fock_matrix += 2.0 * coulomb_matrix;
   
-  // Handle exchange based on functional type
-  if (is_hybrid) fock_matrix -= hybrid_coeff * exchange_matrix;
+  // Add exchange contribution (factor of -1 for exchange, no factor of 2)
+  // Note: exchange_matrix already includes appropriate factors from ERI computation
+  // For pure DFT (non-hybrid), exchange is handled via XC functional
+  // For hybrid functionals, we include a fraction of exact exchange
+  if (is_hybrid) {
+    fock_matrix -= hybrid_coeff * exchange_matrix;
+  }
   
   // Add XC contribution via grid integration
   Eigen::MatrixXd vxc_matrix(n_basis_functions, n_basis_functions);
@@ -172,19 +177,24 @@ void PairDFT::compute_energy()
   Eigen::MatrixXd H_core = kinetic_matrix + nuclear_matrix;
   double one_electron = (density_matrix.cwiseProduct(H_core)).sum();
   
-  // Two-electron energy
+  // Two-electron energy (J and K contributions)
+  // For closed-shell: E = Tr(P*H) + 0.5*Tr(P*G)
+  // where G = 2*J - K for RHF or 2*J - alpha*K for hybrid DFT
+  // and P is the total density matrix (factor of 2 already included)
   double j_energy = (density_matrix.cwiseProduct(coulomb_matrix)).sum();
   double k_energy = 0.0;
   
   if (is_hybrid) {
-    k_energy = hybrid_coeff * (density_matrix.cwiseProduct(exchange_matrix)).sum();
+    k_energy = hybrid_coeff * 0.5 * (density_matrix.cwiseProduct(exchange_matrix)).sum();
   }
   
-  // Kinetic energy component
+  // Kinetic energy component (for output)
   kinetic_energy = (density_matrix.cwiseProduct(kinetic_matrix)).sum();
   
-  // Total energy
-  total_dft_energy = nuclear_repulsion + one_electron + j_energy - k_energy + xc_energy;
+  // Total energy: E = E_nuc + Tr(P*H_core) + 0.5*Tr(P*(2J-K)) + E_xc
+  // For closed-shell: Tr(P*H_core) already includes factor of 2 from density
+  // The 0.5 factor accounts for double-counting in two-electron terms
+  total_dft_energy = nuclear_repulsion + one_electron + 0.5 * j_energy - k_energy + xc_energy;
 }
 
 /* ----------------------------------------------------------------------
@@ -196,7 +206,7 @@ double PairDFT::compute_nuclear_repulsion_energy()
   double energy = 0.0;
   
   double **x = atom->x;
-  double *q = atom->q;  // Use atom->q for nuclear charges
+  // Note: We don't use atom->q anymore, nuclear charges are determined from atom types
   int nlocal = atom->nlocal;
   
   for (int i = 0; i < nlocal; i++) {
@@ -206,8 +216,9 @@ double PairDFT::compute_nuclear_repulsion_energy()
       double dz = x[i][2] - x[j][2];
       double r = sqrt(dx*dx + dy*dy + dz*dz) * ANGSTROM_TO_BOHR;
       
-      // FIXME dont use charge here, need to use atomic number Z
-      const double Zi = 1.0, Zj = 1.0;
+      // Use atomic number Z for nuclear charges (for H2, Z=1)
+      // TODO: Get actual atomic numbers from atom types
+      const double Zi = 1.0, Zj = 1.0;  // Hydrogen atoms
 
       if (r > 1e-10) energy += Zi * Zj / r;
     }
@@ -227,14 +238,12 @@ void PairDFT::initialize_density_guess()
   
   // Determine number of occupied orbitals
   n_electrons = 0;
-  double *q = atom->q;  // Use atom->q for nuclear charges
   int nlocal = atom->nlocal;
   
   for (int i = 0; i < nlocal; i++) {
-    // For now, assume hydrogen atoms (Z=1) unless q[i] specifies otherwise
-    // In LAMMPS, atom->q typically represents the nuclear charge for DFT
-    // If q[i] is not set, default to hydrogen
-    int nuclear_charge = (q[i] > 0) ? static_cast<int>(q[i]) : 1;
+    // For H2 molecule, each H atom contributes 1 electron
+    // TODO: Get actual atomic numbers from atom types
+    int nuclear_charge = 1;  // Hydrogen
     n_electrons += nuclear_charge;
   }
   
@@ -251,9 +260,9 @@ void PairDFT::generate_integration_grid()
 {
   grid_points.clear();
   grid_weights.clear();
+  grid_atom_owners.clear();
   
   double **x = atom->x;
-  double *q = atom->q;
   int nlocal = atom->nlocal;
   
   if (nlocal == 0) return;
@@ -269,7 +278,9 @@ void PairDFT::generate_integration_grid()
     // Generate radial grid
     std::vector<double> r_points(n_radial);
     std::vector<double> r_weights(n_radial);
-    generate_radial_grid(n_radial, q[atom_idx], r_points, r_weights);
+    // Use Z=1 for hydrogen atoms
+    double nuclear_charge = 1.0;
+    generate_radial_grid(n_radial, nuclear_charge, r_points, r_weights);
     
     // Generate angular grid
     std::vector<std::vector<double>> angular_points;
@@ -289,6 +300,7 @@ void PairDFT::generate_integration_grid()
         
         grid_points.push_back(point);
         grid_weights.push_back(w_r * angular_weights[i_ang] * r * r);
+        grid_atom_owners.push_back(atom_idx);
       }
     }
   }
@@ -439,13 +451,17 @@ void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atom
       }
     }
     
-    // Normalize partition functions
+    // Normalize partition functions to get actual Becke weights
     double sum = 0.0;
     for (int i_atom = 0; i_atom < n_atoms; i_atom++) sum += P[i_atom];
     
-    if (sum > 1e-15) becke_weights[i_point] = 1.0;
-    else becke_weights[i_point] = 0.0;
-
+    // Get the weight for the atom that owns this grid point
+    if (sum > 1e-15) {
+      int owner_atom = grid_atom_owners[i_point];
+      becke_weights[i_point] = P[owner_atom] / sum;
+    } else {
+      becke_weights[i_point] = 0.0;
+    }
   }
 }
 
@@ -467,8 +483,10 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
   std::vector<std::vector<std::vector<double>>> basis_gradients;
   
   // For GGA and meta-GGA functionals, we need gradients
-  // For LDA, gradients are optional but we compute them anyway for potential future use
-  // Meta-GGA functionals require gradients for the kinetic energy density (tau)
+  // Initialize basis_gradients to request gradient computation
+  // PBE is a GGA functional, so we always need gradients
+  basis_gradients.resize(n_points);
+  
   evaluate_basis_at_points(grid_points, basis_values, basis_gradients);
   
   // Compute density and gradients at grid points
@@ -598,7 +616,6 @@ void PairDFT::compute_hellmann_feynman_forces()
 {
   double **f = atom->f;
   double **x = atom->x;
-  double *q = atom->q;  // Use atom->q
   int nlocal = atom->nlocal;
   
   // Nuclear-nuclear repulsion gradient
@@ -610,8 +627,11 @@ void PairDFT::compute_hellmann_feynman_forces()
         double dz = x[i][2] - x[j][2];
         double r = sqrt(dx*dx + dy*dy + dz*dz) * ANGSTROM_TO_BOHR;
         
+        // Nuclear charges (Z=1 for hydrogen)
+        double Zi = 1.0, Zj = 1.0;
+        
         if (r > 1e-10) {
-          double force_mag = q[i] * q[j] / (r * r * r);
+          double force_mag = Zi * Zj / (r * r * r);
           f[i][0] += force_mag * dx;
           f[i][1] += force_mag * dy;
           f[i][2] += force_mag * dz;

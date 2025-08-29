@@ -86,6 +86,7 @@ class PairDFT : public Pair {
   std::vector<std::vector<double>> grid_points;
   std::vector<double> grid_weights;
   std::vector<double> becke_weights;
+  std::vector<int> grid_atom_owners;  // Track which atom owns each grid point
   
   // Matrices
   Eigen::MatrixXd overlap_matrix;

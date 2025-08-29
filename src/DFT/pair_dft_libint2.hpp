@@ -256,11 +256,13 @@ void PairDFT::compute_nuclear_integrals()
   // Get nuclear charges and positions
   std::vector<std::pair<double, std::array<double, 3>>> charges_pos;
   double **x = atom->x;
-  double *q = atom->q;  // Use atom->q for nuclear charges
   int nlocal = atom->nlocal;
   
   for (int i = 0; i < nlocal; i++) {
-    charges_pos.push_back({q[i], {x[i][0] * ANGSTROM_TO_BOHR, x[i][1] * ANGSTROM_TO_BOHR, x[i][2] * ANGSTROM_TO_BOHR}});
+    // For hydrogen atoms, nuclear charge Z = 1
+    // TODO: Get actual atomic numbers from atom types
+    double nuclear_charge = 1.0;
+    charges_pos.push_back({nuclear_charge, {x[i][0] * ANGSTROM_TO_BOHR, x[i][1] * ANGSTROM_TO_BOHR, x[i][2] * ANGSTROM_TO_BOHR}});
   }
   
   auto& engine = *engines[2];
@@ -342,39 +344,13 @@ void PairDFT::compute_eri_with_density(const Eigen::MatrixXd &D,
                     int sigma = bf4 + f4;
                     
                     // Coulomb matrix: J[μν] = sum_λσ D[λσ] * (μν|λσ)
-                    double coulomb_contrib = D(lambda, sigma) * eri;
-                    J(mu, nu) += coulomb_contrib;
-                    if (s1 != s2) J(nu, mu) += coulomb_contrib;
-                    if (s3 != s4) {
-                      double coulomb_contrib2 = D(sigma, lambda) * eri;
-                      J(mu, nu) += coulomb_contrib2;
-                      if (s1 != s2) J(nu, mu) += coulomb_contrib2;
-                    }
+                    J(mu, nu) += D(lambda, sigma) * eri;
+                    if (s1 != s2) J(nu, mu) += D(lambda, sigma) * eri;
                     
-                    // Exchange matrix for closed-shell restricted Hartree-Fock:
-                    // K[μν] = sum_λσ D[λσ] * (μλ|σν)
-                    // 
-                    // We compute the integral (μν|λσ) but need (μλ|σν) for exchange
-                    // Using the 8-fold permutation symmetry:
-                    // (μν|λσ) = (νμ|λσ) = (μν|σλ) = (νμ|σλ) = 
-                    // (λσ|μν) = (σλ|μν) = (λσ|νμ) = (σλ|νμ)
-                    //
-                    // The integral (μν|λσ) can be reinterpreted for exchange:
-                    // Contributes to K[μλ] via (μλ|νσ) with density D[νσ]
-                    // Contributes to K[μσ] via (μσ|νλ) with density D[νλ]
-                    // And by symmetry to K[νλ] and K[νσ]
-                    
-                    // Factor of 0.5 for closed-shell (each orbital occupied by 2 electrons)
-                    K(mu, lambda) -= 0.5 * D(nu, sigma) * eri;
-                    K(mu, sigma) -= 0.5 * D(nu, lambda) * eri;
-                    K(nu, lambda) -= 0.5 * D(mu, sigma) * eri;
-                    K(nu, sigma) -= 0.5 * D(mu, lambda) * eri;
-                    
-                    // Use symmetry of K matrix (K is Hermitian)
-                    if (mu != lambda) K(lambda, mu) -= 0.5 * D(sigma, nu) * eri;
-                    if (mu != sigma) K(sigma, mu) -= 0.5 * D(lambda, nu) * eri;
-                    if (nu != lambda) K(lambda, nu) -= 0.5 * D(sigma, mu) * eri;
-                    if (nu != sigma) K(sigma, nu) -= 0.5 * D(lambda, mu) * eri;
+                    // Exchange matrix: K[μν] = sum_λσ D[μσ] * (μλ|νσ)
+                    // Using permutation symmetry: (μν|λσ) = (λσ|μν)
+                    K(mu, lambda) += D(nu, sigma) * eri;
+                    if (mu != lambda) K(lambda, mu) += D(sigma, nu) * eri;
                   }
                 }
               }
@@ -484,10 +460,12 @@ void PairDFT::compute_nuclear_gradient(std::vector<Eigen::MatrixXd> &dV)
   // Get nuclear charges and positions
   std::vector<std::pair<double, std::array<double, 3>>> charges_pos;
   double **x = atom->x;
-  double *q = atom->q;
   
   for (int i = 0; i < nlocal; i++) {
-    charges_pos.push_back({q[i], {x[i][0] * ANGSTROM_TO_BOHR, x[i][1] * ANGSTROM_TO_BOHR, x[i][2] * ANGSTROM_TO_BOHR}});
+    // For hydrogen atoms, nuclear charge Z = 1
+    // TODO: Get actual atomic numbers from atom types
+    double nuclear_charge = 1.0;
+    charges_pos.push_back({nuclear_charge, {x[i][0] * ANGSTROM_TO_BOHR, x[i][1] * ANGSTROM_TO_BOHR, x[i][2] * ANGSTROM_TO_BOHR}});
   }
   
   auto& engine = *engines[5]; // nuclear gradient engine

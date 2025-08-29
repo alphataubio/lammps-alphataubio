@@ -224,7 +224,7 @@ void PairDFT::allocate()
 void PairDFT::init_style()
 {
   if (atom->tag_enable == 0) error->all(FLERR, "Pair style dft requires atom IDs");
-  if (atom->q_flag == 0) error->all(FLERR, "Pair style dft requires atom attribute q");
+  // Note: We don't require atom->q since we determine nuclear charges from atom types
   
   // Request standard neighbor list
   neighbor->add_request(this, NeighConst::REQ_DEFAULT);

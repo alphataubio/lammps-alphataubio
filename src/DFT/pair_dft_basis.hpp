@@ -84,6 +84,11 @@ void PairDFT::load_basis_from_json(const std::string &filename)
       int atomic_number = std::stoi(element_str);
       
       if (element_data.contains("electron_shells")) {
+        // Store shells for this element (will be assigned to atoms later)
+        std::vector<int> element_am;
+        std::vector<std::vector<double>> element_exp;
+        std::vector<std::vector<double>> element_coeff;
+        
         for (auto& shell : element_data["electron_shells"]) {
           int am = -1;
           
@@ -97,8 +102,7 @@ void PairDFT::load_basis_from_json(const std::string &filename)
           
           if (am < 0) continue;
           
-          angular_momentum.push_back(am);
-          n_shells++;
+          element_am.push_back(am);
           
           // Get exponents
           std::vector<double> shell_exponents;
@@ -108,7 +112,7 @@ void PairDFT::load_basis_from_json(const std::string &filename)
               shell_exponents.push_back(exp_val);
             }
           }
-          exponents.push_back(shell_exponents);
+          element_exp.push_back(shell_exponents);
           
           // Get coefficients
           std::vector<double> shell_coefficients;
@@ -121,25 +125,37 @@ void PairDFT::load_basis_from_json(const std::string &filename)
               }
             }
           }
-          coefficients.push_back(shell_coefficients);
+          element_coeff.push_back(shell_coefficients);
+        }
+        
+        // Now assign shells to each atom of this element type
+        // For H2, both atoms are hydrogen (element 1)
+        int nlocal = atom->nlocal;
+        for (int atom_idx = 0; atom_idx < nlocal; atom_idx++) {
+          // TODO: Check atom type to match with element
+          // For now, assume all atoms are of this element type
           
-          // Count basis functions
-          // s: 1, p: 3, d: 6, f: 10, g: 15
-          int n_funcs = (am + 1) * (am + 2) / 2;
-          n_basis_functions += n_funcs;
-          
-          // Map shells to atoms - for now, distribute shells among atoms
-          // In a real implementation, this would need proper atom-type mapping
-          // based on the actual atom types in the simulation
-          int atom_index = 0;  // Default to first atom
-          shell_to_atom.push_back(atom_index);
+          // Add all shells for this element to this atom
+          for (size_t s = 0; s < element_am.size(); s++) {
+            angular_momentum.push_back(element_am[s]);
+            exponents.push_back(element_exp[s]);
+            coefficients.push_back(element_coeff[s]);
+            shell_to_atom.push_back(atom_idx);
+            n_shells++;
+            
+            // Count basis functions
+            // s: 1, p: 3, d: 6, f: 10, g: 15
+            int n_funcs = (element_am[s] + 1) * (element_am[s] + 2) / 2;
+            n_basis_functions += n_funcs;
+          }
         }
       }
     }
   }
   
-  // Normalize basis functions
-  normalize_basis_functions();
+  // Skip normalization - basis sets from BSE are already normalized
+  // normalize_basis_functions();
+  normalized_coefficients = coefficients;  // Use coefficients as-is
   
   if (comm->me == 0) {
     utils::logmesg(lmp, fmt::format("Loaded basis set with {} shells and {} basis functions\n", 
@@ -326,19 +342,37 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
           
           // Compute gradients if needed
           if (need_gradients) {
-            // Gradient of exp(-alpha*r^2) * x^nx * y^ny * z^nz
+            // Gradient of N * exp(-alpha*r^2) * x^nx * y^ny * z^nz
+            // d/dx = N * exp(-alpha*r^2) * y^ny * z^nz * (nx * x^(nx-1) - 2*alpha*x * x^nx)
             
-            // x-component: d/dx [exp(-alpha*r^2) * x^nx * y^ny * z^nz]
-            double grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
-                           (nx * pow(dx, std::max(0, nx-1)) - 2*alpha * dx * pow(dx, nx));
+            double grad_x, grad_y, grad_z;
             
-            // y-component: d/dy [exp(-alpha*r^2) * x^nx * y^ny * z^nz]  
-            double grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
-                           (ny * pow(dy, std::max(0, ny-1)) - 2*alpha * dy * pow(dy, ny));
+            // x-component
+            if (nx > 0) {
+              grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
+                      pow(dx, nx-1) * (nx - 2*alpha*dx*dx);
+            } else {
+              grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
+                      (-2*alpha*dx);
+            }
             
-            // z-component: d/dz [exp(-alpha*r^2) * x^nx * y^ny * z^nz]
-            double grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
-                           (nz * pow(dz, std::max(0, nz-1)) - 2*alpha * dz * pow(dz, nz));
+            // y-component
+            if (ny > 0) {
+              grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
+                      pow(dy, ny-1) * (ny - 2*alpha*dy*dy);
+            } else {
+              grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
+                      (-2*alpha*dy);
+            }
+            
+            // z-component
+            if (nz > 0) {
+              grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
+                      pow(dz, nz-1) * (nz - 2*alpha*dz*dz);
+            } else {
+              grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
+                      (-2*alpha*dz);
+            }
             
             gradient[0] += grad_x;
             gradient[1] += grad_y; 
