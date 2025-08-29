@@ -13,7 +13,8 @@ mass            1 1.00794
 # --- DFT setup (LibXC/libint2) ---
 # Basis JSON must include H shells in BSE JSON format
 # pair_style      dft PBE def2-svp.H.json grid 50000 tol 1e-6 maxiter 150
-pair_style      dft PBE aug-cc-pvtz.H.json grid 50000 tol 1e-6 maxiter 150
+pair_style      dft PBE  /Users/mitch/github/lammps-alphataubio/examples/DFT/aug-cc-pvtz.H.json &
+  grid 50000 tol 1e-6 maxiter 150
 pair_coeff      * *
 
 neighbor        2.0 bin
