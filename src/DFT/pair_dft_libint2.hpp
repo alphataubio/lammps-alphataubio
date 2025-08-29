@@ -24,17 +24,36 @@ void PairDFT::initialize_libint()
   
   for (int s = 0; s < n_shells; s++) {
     int l = angular_momentum[s];
-    auto shell_exponents = get_exponents(s);
-    auto shell_coefficients = get_coefficients(s);
+    auto shell_exponents = exponents[s];
+    auto shell_coefficients = coefficients[s];
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, fmt::format("Shell {}: l={}, n_exp={}, n_coeff={}\n", 
+                                      s, l, shell_exponents.size(), shell_coefficients.size()));
+    }
+    
+    // Skip shells with no exponents
+    if (shell_exponents.empty()) {
+      if (comm->me == 0) {
+        utils::logmesg(lmp, fmt::format("Warning: Shell {} has no exponents, skipping\n", s));
+      }
+      continue;
+    }
     
     // Convert to libint2's svector (small_vector)
     libint2::svector<double> alpha_svec;
     for (auto exp : shell_exponents) alpha_svec.push_back(exp);
     
-    // Create contraction
+    // Create contraction - coefficients must match exponents size
     libint2::Shell::Contraction contr;
     contr.l = l;
     contr.pure = false;  // Use Cartesian Gaussians
+    
+    // Make sure we have the right number of coefficients
+    if (shell_coefficients.size() != shell_exponents.size()) {
+      error->all(FLERR, fmt::format("Shell {} has {} exponents but {} coefficients", 
+                                    s, shell_exponents.size(), shell_coefficients.size()));
+    }
     
     // Convert coefficients to svector
     for (auto coeff : shell_coefficients) contr.coeff.push_back(coeff);
@@ -43,18 +62,18 @@ void PairDFT::initialize_libint()
     libint2::svector<libint2::Shell::Contraction> contr_svec;
     contr_svec.push_back(contr);
     
-    // Create shell
-    libint2::Shell shell;
-    shell.alpha = alpha_svec;
-    shell.contr = contr_svec;
-    
+    // Create shell using the constructor
     // Set origin based on atom position
     int atom_idx = (s < shell_to_atom.size()) ? shell_to_atom[s] : 0;
+    std::array<double, 3> origin = {{0.0, 0.0, 0.0}};
     if (atom_idx < nlocal && nlocal > 0) {
-      shell.O = {{x[atom_idx][0] * ANGSTROM_TO_BOHR, x[atom_idx][1] * ANGSTROM_TO_BOHR, x[atom_idx][2] * ANGSTROM_TO_BOHR}};
-    } else {
-      shell.O = {{0.0, 0.0, 0.0}};  // Default to origin if atom not found
+      origin = {{x[atom_idx][0] * ANGSTROM_TO_BOHR, 
+                 x[atom_idx][1] * ANGSTROM_TO_BOHR, 
+                 x[atom_idx][2] * ANGSTROM_TO_BOHR}};
     }
+    
+    // Use the constructor instead of setting fields directly
+    libint2::Shell shell(alpha_svec, contr_svec, origin);
     
     shells.push_back(shell);
   }
