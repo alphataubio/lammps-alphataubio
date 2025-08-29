@@ -201,10 +201,10 @@ double PairDFT::compute_normalization(int l, double exponent)
    Set atom positions for basis functions
 ------------------------------------------------------------------------- */
 
-//void PairDFT::set_atom_positions(const std::vector<std::vector<double>> &positions)
-//{
-//  atom_positions = positions;
-//}
+void PairDFT::set_atom_positions(const std::vector<std::vector<double>> &positions)
+{
+  atom_positions = positions;
+}
 
 /* ----------------------------------------------------------------------
    Get angular momentum for shell
@@ -237,6 +237,23 @@ std::vector<double> PairDFT::get_coefficients(int shell) const
 }
 
 /* ----------------------------------------------------------------------
+   Get Cartesian Gaussian function indices for angular momentum
+------------------------------------------------------------------------- */
+
+void PairDFT::get_cartesian_indices(int l, std::vector<std::vector<int>> &indices)
+{
+  indices.clear();
+  
+  // Generate all combinations of (nx, ny, nz) where nx + ny + nz = l
+  for (int nx = 0; nx <= l; nx++) {
+    for (int ny = 0; ny <= l - nx; ny++) {
+      int nz = l - nx - ny;
+      indices.push_back({nx, ny, nz});
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------
    Evaluate basis functions at grid points
 ------------------------------------------------------------------------- */
 
@@ -262,52 +279,76 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
       int l = angular_momentum[shell];
       auto shell_exponents = get_exponents(shell);
       auto shell_coefficients = get_coefficients(shell);
+      int atom_id = shell_to_atom[shell];
       
-      // Number of functions in this shell
-      int n_funcs = (l + 1) * (l + 2) / 2;
+      // Get atom position (default to origin if not set)
+      std::vector<double> atom_pos = {0.0, 0.0, 0.0};
+      if (atom_id < atom_positions.size()) {
+        atom_pos = atom_positions[atom_id];
+      }
       
-      // Evaluate contracted Gaussian
-      for (int func = 0; func < n_funcs; func++) {
+      // Calculate distance vector from atom to grid point
+      double dx = points[i_point][0] - atom_pos[0];
+      double dy = points[i_point][1] - atom_pos[1];
+      double dz = points[i_point][2] - atom_pos[2];
+      double r2 = dx*dx + dy*dy + dz*dz;
+      
+      // Get Cartesian indices for this angular momentum
+      std::vector<std::vector<int>> cart_indices;
+      get_cartesian_indices(l, cart_indices);
+      
+      // Evaluate each Cartesian Gaussian in the shell
+      for (size_t func = 0; func < cart_indices.size(); func++) {
+        int nx = cart_indices[func][0];
+        int ny = cart_indices[func][1];
+        int nz = cart_indices[func][2];
+        
         double value = 0.0;
+        std::vector<double> gradient = {0.0, 0.0, 0.0};
         
         // Contract over primitives
         for (size_t prim = 0; prim < shell_exponents.size(); prim++) {
           double alpha = shell_exponents[prim];
           double coeff = shell_coefficients[prim];
           
-          // FIXME Distance from basis function center (assuming at origin for now)
-          double r2 = 0.0;
-          for (int k = 0; k < 3; k++) {
-            r2 += points[i_point][k] * points[i_point][k];
-          }
+          // Gaussian exponential part
+          double gauss_exp = exp(-alpha * r2);
           
-          // Gaussian value
-          double gauss = coeff * exp(-alpha * r2);
+          // Cartesian polynomial part
+          double poly_part = pow(dx, nx) * pow(dy, ny) * pow(dz, nz);
           
-          // FIXME Add angular part (simplified - should use spherical harmonics)
-          if (l == 0) {
-            // s-orbital
-            value += gauss;
-          } else if (l == 1) {
-            // p-orbitals (px, py, pz)
-            if (func < 3) {
-              value += gauss * points[i_point][func];
-            }
-          } else if (l == 2) {
-            // FIXME d-orbitals (simplified)
-            value += gauss * pow(points[i_point][func % 3], 2);
+          // Full basis function value
+          double prim_value = coeff * gauss_exp * poly_part;
+          value += prim_value;
+          
+          // Compute gradients if needed
+          if (need_gradients) {
+            // Gradient of exp(-alpha*r^2) * x^nx * y^ny * z^nz
+            
+            // x-component: d/dx [exp(-alpha*r^2) * x^nx * y^ny * z^nz]
+            double grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
+                           (nx * pow(dx, std::max(0, nx-1)) - 2*alpha * dx * pow(dx, nx));
+            
+            // y-component: d/dy [exp(-alpha*r^2) * x^nx * y^ny * z^nz]  
+            double grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
+                           (ny * pow(dy, std::max(0, ny-1)) - 2*alpha * dy * pow(dy, ny));
+            
+            // z-component: d/dz [exp(-alpha*r^2) * x^nx * y^ny * z^nz]
+            double grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
+                           (nz * pow(dz, std::max(0, nz-1)) - 2*alpha * dz * pow(dz, nz));
+            
+            gradient[0] += grad_x;
+            gradient[1] += grad_y; 
+            gradient[2] += grad_z;
           }
         }
         
         basis_values[i_point][bf_idx] = value;
         
-        // Compute gradients if needed
         if (need_gradients) {
-          // FIXME Simplified gradient - full implementation would be more complex
-          for (int k = 0; k < 3; k++) {
-            basis_gradients[i_point][bf_idx][k] = 
-              -2.0 * shell_exponents[0] * points[i_point][k] * value;
-          }
+          basis_gradients[i_point][bf_idx][0] = gradient[0];
+          basis_gradients[i_point][bf_idx][1] = gradient[1];
+          basis_gradients[i_point][bf_idx][2] = gradient[2];
         }
         
         bf_idx++;
@@ -315,3 +356,4 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
     }
   }
 }
+

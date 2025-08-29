@@ -110,7 +110,7 @@ class PairDFT : public Pair {
   std::vector<std::vector<double>> exponents;
   std::vector<std::vector<double>> coefficients;
   std::vector<std::vector<double>> normalized_coefficients;
-  //std::vector<std::vector<double>> atom_positions;
+  std::vector<std::vector<double>> atom_positions;
   
   // LibInt2 data
   std::unique_ptr<libint2::BasisSet> libint_basis;
@@ -127,6 +127,7 @@ class PairDFT : public Pair {
   int get_angular_momentum(int shell) const;
   std::vector<double> get_exponents(int shell) const;
   std::vector<double> get_coefficients(int shell) const;
+  void get_cartesian_indices(int l, std::vector<std::vector<int>> &indices);
   void evaluate_basis_at_points(const std::vector<std::vector<double>> &points,
                                 std::vector<std::vector<double>> &basis_values,
                                 std::vector<std::vector<std::vector<double>>> &basis_gradients);
