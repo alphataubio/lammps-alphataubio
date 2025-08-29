@@ -111,7 +111,6 @@ class PairDFT : public Pair {
   std::vector<std::vector<double>> exponents;
   std::vector<std::vector<double>> coefficients;
   std::vector<std::vector<double>> normalized_coefficients;
-  std::vector<std::vector<double>> atom_positions;
   
   // LibInt2 data
   std::unique_ptr<libint2::BasisSet> libint_basis;
@@ -124,7 +123,6 @@ class PairDFT : public Pair {
   void load_basis_from_json(const std::string &filename);
   void normalize_basis_functions();
   double compute_normalization(int l, double exponent);
-  void set_atom_positions(const std::vector<std::vector<double>> &positions);
   int get_angular_momentum(int shell) const;
   std::vector<double> get_exponents(int shell) const;
   std::vector<double> get_coefficients(int shell) const;
