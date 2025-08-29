@@ -32,13 +32,13 @@
 
 using namespace LAMMPS_NS;
 
+static constexpr double ANGSTROM_TO_BOHR = 1/0.52917721067;
+
 // Include the implementations from the .hpp files
 #include "pair_dft_basis.hpp"
 #include "pair_dft_libxc.hpp"
 #include "pair_dft_libint2.hpp"
 #include "pair_dft_scf.hpp"
-
-static constexpr double ANGSTROM_TO_BOHR = 1/0.52917721067;
 
 /* ---------------------------------------------------------------------- */
 

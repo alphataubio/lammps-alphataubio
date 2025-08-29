@@ -204,8 +204,12 @@ double PairDFT::compute_nuclear_repulsion_energy()
       double dx = x[i][0] - x[j][0];
       double dy = x[i][1] - x[j][1];
       double dz = x[i][2] - x[j][2];
-      double r = sqrt(dx*dx + dy*dy + dz*dz);
-      if (r > 1e-10) energy += q[i] * q[j] / r;
+      double r = sqrt(dx*dx + dy*dy + dz*dz) * ANGSTROM_TO_BOHR;
+      
+      // FIXME dont use charge here, need to use atomic number Z
+      const double Zi = 1.0, Zj = 1.0;
+
+      if (r > 1e-10) energy += Zi * Zj / r;
     }
   }
   return energy;
@@ -223,12 +227,15 @@ void PairDFT::initialize_density_guess()
   
   // Determine number of occupied orbitals
   n_electrons = 0;
-  double *q = atom->q;  // Use atom->q
+  double *q = atom->q;  // Use atom->q for nuclear charges
   int nlocal = atom->nlocal;
   
   for (int i = 0; i < nlocal; i++) {
-    const int atomic_number = 1;
-    n_electrons += (atomic_number + static_cast<int>(q[i]));
+    // For now, assume hydrogen atoms (Z=1) unless q[i] specifies otherwise
+    // In LAMMPS, atom->q typically represents the nuclear charge for DFT
+    // If q[i] is not set, default to hydrogen
+    int nuclear_charge = (q[i] > 0) ? static_cast<int>(q[i]) : 1;
+    n_electrons += nuclear_charge;
   }
   
   n_occupied_orbitals = n_electrons / 2;  // Assuming closed-shell
@@ -276,9 +283,9 @@ void PairDFT::generate_integration_grid()
       
       for (size_t i_ang = 0; i_ang < angular_points.size(); i_ang++) {
         std::vector<double> point(3);
-        point[0] = x[atom_idx][0] + r * angular_points[i_ang][0];
-        point[1] = x[atom_idx][1] + r * angular_points[i_ang][1];
-        point[2] = x[atom_idx][2] + r * angular_points[i_ang][2];
+        point[0] = x[atom_idx][0] * ANGSTROM_TO_BOHR + r * angular_points[i_ang][0];
+        point[1] = x[atom_idx][1] * ANGSTROM_TO_BOHR + r * angular_points[i_ang][1];
+        point[2] = x[atom_idx][2] * ANGSTROM_TO_BOHR + r * angular_points[i_ang][2];
         
         grid_points.push_back(point);
         grid_weights.push_back(w_r * angular_weights[i_ang] * r * r);
@@ -289,7 +296,7 @@ void PairDFT::generate_integration_grid()
   // Compute Becke partitioning weights
   std::vector<std::vector<double>> atom_positions;
   for (int i = 0; i < nlocal; i++) {
-    atom_positions.push_back({x[i][0], x[i][1], x[i][2]});
+    atom_positions.push_back({x[i][0] * ANGSTROM_TO_BOHR, x[i][1] * ANGSTROM_TO_BOHR, x[i][2] * ANGSTROM_TO_BOHR});
   }
   compute_becke_weights(atom_positions);
 }
@@ -459,12 +466,10 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
   std::vector<std::vector<double>> basis_values;
   std::vector<std::vector<std::vector<double>>> basis_gradients;
   
-  // FIXME IS THIS CORRECT ???
-  if (is_meta_gga) {
-    evaluate_basis_at_points(grid_points, basis_values, basis_gradients);
-  } else {
-    evaluate_basis_at_points(grid_points, basis_values, basis_gradients);
-  }
+  // For GGA and meta-GGA functionals, we need gradients
+  // For LDA, gradients are optional but we compute them anyway for potential future use
+  // Meta-GGA functionals require gradients for the kinetic energy density (tau)
+  evaluate_basis_at_points(grid_points, basis_values, basis_gradients);
   
   // Compute density and gradients at grid points
   std::vector<double> rho(n_points, 0.0);
@@ -523,7 +528,7 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
   for (int i_point = 0; i_point < n_points; i_point++) {
     double w = grid_weights[i_point] * becke_weights[i_point];
     
-    // LDA contribution
+    // LDA contribution: v_xc[rho] * phi_i * phi_j
     for (int i = 0; i < n_basis_functions; i++) {
       for (int j = 0; j <= i; j++) {
         double val = vrho[i_point] * basis_values[i_point][i] * basis_values[i_point][j] * w;
@@ -532,9 +537,56 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
       }
     }
     
-    // FIXME
-    // GGA and meta-GGA contributions would go here
-    // (simplified for now)
+    // GGA contribution: 2 * v_xc[sigma] * grad(rho) . grad(phi)
+    if (!basis_gradients.empty() && vsigma[i_point] != 0.0) {
+      // First compute gradient of density at this point
+      std::vector<double> grad_rho(3, 0.0);
+      for (int i = 0; i < n_basis_functions; i++) {
+        for (int j = 0; j < n_basis_functions; j++) {
+          double P_ij = density_matrix(i, j);
+          for (int k = 0; k < 3; k++) {
+            grad_rho[k] += P_ij * (basis_gradients[i_point][i][k] * basis_values[i_point][j] +
+                                   basis_values[i_point][i] * basis_gradients[i_point][j][k]);
+          }
+        }
+      }
+      
+      // Add GGA contribution to matrix elements
+      for (int i = 0; i < n_basis_functions; i++) {
+        for (int j = 0; j <= i; j++) {
+          double gga_contrib = 0.0;
+          
+          // Contribution from derivative of functional w.r.t. |grad rho|^2
+          for (int k = 0; k < 3; k++) {
+            gga_contrib += 2.0 * vsigma[i_point] * w * (
+              grad_rho[k] * (basis_gradients[i_point][i][k] * basis_values[i_point][j] +
+                            basis_values[i_point][i] * basis_gradients[i_point][j][k])
+            );
+          }
+          
+          vxc_matrix(i, j) += gga_contrib;
+          if (i != j) vxc_matrix(j, i) += gga_contrib;
+        }
+      }
+    }
+    
+    // Meta-GGA contribution: v_xc[tau] * grad(phi_i) . grad(phi_j)
+    if (is_meta_gga && vtau[i_point] != 0.0 && !basis_gradients.empty()) {
+      for (int i = 0; i < n_basis_functions; i++) {
+        for (int j = 0; j <= i; j++) {
+          double tau_contrib = 0.0;
+          
+          // Kinetic energy density contribution
+          for (int k = 0; k < 3; k++) {
+            tau_contrib += 0.5 * vtau[i_point] * w * 
+                          basis_gradients[i_point][i][k] * basis_gradients[i_point][j][k];
+          }
+          
+          vxc_matrix(i, j) += tau_contrib;
+          if (i != j) vxc_matrix(j, i) += tau_contrib;
+        }
+      }
+    }
   }
 }
 
@@ -556,7 +608,7 @@ void PairDFT::compute_hellmann_feynman_forces()
         double dx = x[i][0] - x[j][0];
         double dy = x[i][1] - x[j][1];
         double dz = x[i][2] - x[j][2];
-        double r = sqrt(dx*dx + dy*dy + dz*dz);
+        double r = sqrt(dx*dx + dy*dy + dz*dz) * ANGSTROM_TO_BOHR;
         
         if (r > 1e-10) {
           double force_mag = q[i] * q[j] / (r * r * r);
@@ -634,8 +686,12 @@ void PairDFT::print_scf_iteration()
 {
   if (comm->me == 0) {
     double density_change = compute_density_change();
+    // Note: energy_change is already computed in perform_scf() from prev_energy
+    // This local calculation was incorrect
+    static double prev_print_energy = 0.0;
     double energy_change = (current_iteration == 1) ? 0.0 : 
-                          total_dft_energy - ((current_iteration > 1) ? total_dft_energy : 0.0);
+                          total_dft_energy - prev_print_energy;
+    prev_print_energy = total_dft_energy;
     
     utils::logmesg(lmp, fmt::format("{:4d} {:15.8f} {:12.5e} {:12.5e}\n",
                                     current_iteration, total_dft_energy,

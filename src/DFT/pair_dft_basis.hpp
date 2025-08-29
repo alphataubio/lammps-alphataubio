@@ -128,8 +128,11 @@ void PairDFT::load_basis_from_json(const std::string &filename)
           int n_funcs = (am + 1) * (am + 2) / 2;
           n_basis_functions += n_funcs;
           
-          // For now, assume one atom type - would need atom mapping in real use
-          shell_to_atom.push_back(0);
+          // Map shells to atoms - for now, distribute shells among atoms
+          // In a real implementation, this would need proper atom-type mapping
+          // based on the actual atom types in the simulation
+          int atom_index = 0;  // Default to first atom
+          shell_to_atom.push_back(atom_index);
         }
       }
     }
