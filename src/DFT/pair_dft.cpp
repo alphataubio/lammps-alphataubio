@@ -38,7 +38,6 @@ using namespace LAMMPS_NS;
 #include "pair_dft_libint2.hpp"
 #include "pair_dft_scf.hpp"
 
-
 /* ---------------------------------------------------------------------- */
 
 PairDFT::PairDFT(LAMMPS *lmp) : Pair(lmp)
@@ -47,6 +46,11 @@ PairDFT::PairDFT(LAMMPS *lmp) : Pair(lmp)
   restartinfo = 0;
   manybody_flag = 1;
   one_coeff = 0;
+  
+  // Initialize pointers
+  xc_func_x = nullptr;
+  xc_func_c = nullptr;
+  xc_func_xc = nullptr;
   
   // SCF parameters
   energy_tolerance = 1.0e-8;
@@ -78,13 +82,17 @@ PairDFT::PairDFT(LAMMPS *lmp) : Pair(lmp)
 
 PairDFT::~PairDFT()
 {
+  // Cleanup LibXC
+  cleanup_libxc();
+  
+  // Cleanup libint2
+  cleanup_libint();
+  libint2::finalize();
+  
   if (allocated) {
     memory->destroy(setflag);
     memory->destroy(cutsq);
   }
-  
-  // Cleanup libint2
-  libint2::finalize();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -104,7 +112,7 @@ void PairDFT::compute(int eflag, int vflag)
   for (int i = 0; i < nlocal; i++) {
     positions.push_back({x[i][0], x[i][1], x[i][2]});
   }
-  basis_manager->set_atom_positions(positions);
+  //set_atom_positions(positions);
   
   // Perform SCF calculation for the current configuration
   perform_scf();
@@ -116,6 +124,7 @@ void PairDFT::compute(int eflag, int vflag)
   // Store energy
   if (eflag) eng_vdwl = total_dft_energy;
   
+  if (vflag_fdotr) virial_fdotr_compute();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -127,6 +136,9 @@ void PairDFT::settings(int narg, char **arg)
   // Parse: pair_style dft <functional> <basis.json> [options]
   functional_name = std::string(arg[0]);
   basis_file = std::string(arg[1]);
+  
+  // Parse the functional name and initialize LibXC
+  parse_functional_name(functional_name.c_str());
   
   // Check if basis file exists
   std::ifstream file(basis_file);
@@ -164,7 +176,7 @@ void PairDFT::settings(int narg, char **arg)
 
 void PairDFT::coeff(int narg, char **arg)
 {
-  if (narg < 2) utils::missing_cmd_args(FLERR, "pair_coeff list", error);
+  if (narg < 2) error->all(FLERR, "Incorrect args for pair coefficients");
   if (!allocated) allocate();
 
   int ilo, ihi, jlo, jhi;
@@ -179,7 +191,24 @@ void PairDFT::coeff(int narg, char **arg)
     }
   }
 
-  if (count == 0) error->all(FLERR, "Incorrect args for pair coefficients" + utils::errorurl(21));
+  if (count == 0) error->all(FLERR, "Incorrect args for pair coefficients");
+}
+
+/* ----------------------------------------------------------------------
+   allocate all arrays
+------------------------------------------------------------------------- */
+
+void PairDFT::allocate()
+{
+  allocated = 1;
+  int n = atom->ntypes;
+
+  memory->create(setflag, n + 1, n + 1, "pair:setflag");
+  for (int i = 1; i <= n; i++)
+    for (int j = i; j <= n; j++)
+      setflag[i][j] = 0;
+
+  memory->create(cutsq, n + 1, n + 1, "pair:cutsq");
 }
 
 /* ----------------------------------------------------------------------
@@ -195,3 +224,11 @@ void PairDFT::init_style()
   neighbor->add_request(this, NeighConst::REQ_DEFAULT);
 }
 
+/* ----------------------------------------------------------------------
+   init for one type pair i,j and corresponding j,i
+------------------------------------------------------------------------- */
+
+double PairDFT::init_one(int i, int j)
+{
+  return cut_global;
+}

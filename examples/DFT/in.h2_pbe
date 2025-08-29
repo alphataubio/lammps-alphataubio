@@ -1,6 +1,6 @@
 # H2 single-point energy with DFT(PBE) + def2-SVP
-units           real
-atom_style      atomic
+units           metal
+atom_style      charge
 boundary        f f f
 
 # Box and atoms
@@ -12,13 +12,18 @@ mass            1 1.00794
 
 # --- DFT setup (LibXC/libint2) ---
 # Basis JSON must include H shells in BSE JSON format
-pair_style      dft PBE def2-svp.H.json grid 50000 tol 1e-9 maxiter 150
+# pair_style      dft PBE def2-svp.H.json grid 50000 tol 1e-9 maxiter 150
+pair_style      dft PBE aug-cc-pvtz.H.json grid 50000 tol 1e-9 maxiter 150
+
+
+
+
 pair_coeff      * *
 
 neighbor        2.0 bin
 neigh_modify    delay 0 every 1
 
-thermo_style    custom step pe etotal press
+thermo_style    custom step ke pe etotal press
 thermo          1
 
 # Single-point

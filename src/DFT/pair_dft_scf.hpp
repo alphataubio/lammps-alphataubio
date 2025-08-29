@@ -1,22 +1,10 @@
 /* ----------------------------------------------------------------------
-   LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
-   https://www.lammps.org/, Sandia National Laboratories
-   LAMMPS development team: developers@lammps.org
-
-   Copyright (2003) Sandia Corporation.  Under the terms of Contract
-   DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
-   certain rights in this software.  This software is distributed under
-   the GNU General Public License.
-
-   See the README file in the top-level LAMMPS directory.
+   SCF and grid integration methods for PairDFT
 ------------------------------------------------------------------------- */
 
-#include "pair_dft.h"
 #include <cmath>
 #include <vector>
 #include <algorithm>
-
-using namespace LAMMPS_NS;
 
 /* ----------------------------------------------------------------------
    Perform SCF calculation
@@ -37,11 +25,11 @@ void PairDFT::perform_scf()
     solve_roothaan_hall();
     
     // Update density matrix
-    compute_density_matrix();
+    update_density_matrix();
     
     // Mix with previous density for better convergence
     if (current_iteration > 1) {
-      density_matrix->mix_with_previous(0.5);
+      mix_density_matrices(0.5);
     }
     
     // Compute energy
@@ -49,7 +37,7 @@ void PairDFT::perform_scf()
     
     // Check convergence
     double energy_change = std::abs(total_dft_energy - prev_energy);
-    double density_change = density_matrix->get_change();
+    double density_change = compute_density_change();
     
     print_scf_iteration();
     
@@ -68,85 +56,219 @@ void PairDFT::perform_scf()
   print_scf_summary();
 }
 
-
 /* ----------------------------------------------------------------------
-   SCF output methods
+   Build Fock matrix
 ------------------------------------------------------------------------- */
 
-void PairDFT::print_scf_header()
+void PairDFT::build_fock_matrix()
 {
-  if (comm->me == 0) {
-    utils::logmesg(lmp, "\n");
-    utils::logmesg(lmp, "================================================\n");
-    utils::logmesg(lmp, "            DFT SCF CALCULATION\n");
-    utils::logmesg(lmp, "================================================\n");
-    utils::logmesg(lmp, fmt::format("Functional: {}\n", functional_name));
-    utils::logmesg(lmp, fmt::format("Basis functions: {}\n", n_basis_functions));
-    utils::logmesg(lmp, fmt::format("Electrons: {}\n", n_electrons));
-    utils::logmesg(lmp, fmt::format("Grid points: {}\n", grid_size));
-    utils::logmesg(lmp, "------------------------------------------------\n");
-    utils::logmesg(lmp, " Iter    Energy         Delta E      RMS Dens\n");
-    utils::logmesg(lmp, "------------------------------------------------\n");
+  // Core Hamiltonian
+  fock_matrix = kinetic_matrix + nuclear_matrix;
+  
+  // Two-electron part: Coulomb and Exchange
+  compute_eri_with_density(density_matrix, coulomb_matrix, exchange_matrix);
+  
+  // Add Coulomb contribution
+  fock_matrix += 2.0 * coulomb_matrix;
+  
+  // Handle exchange based on functional type
+  if (is_hybrid) fock_matrix -= hybrid_coeff * exchange_matrix;
+  
+  // Add XC contribution via grid integration
+  Eigen::MatrixXd vxc_matrix(n_basis_functions, n_basis_functions);
+  vxc_matrix.setZero();
+  
+  // Generate grid and integrate XC
+  generate_integration_grid();
+  integrate_xc_on_grid(xc_energy, vxc_matrix);
+  
+  fock_matrix += vxc_matrix;
+}
+
+/* ----------------------------------------------------------------------
+   Solve Roothaan-Hall equations
+------------------------------------------------------------------------- */
+
+void PairDFT::solve_roothaan_hall()
+{
+  // Transform Fock matrix to orthogonal basis
+  // F' = S^(-1/2) * F * S^(-1/2)
+  
+  // Compute S^(-1/2) using eigendecomposition
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(overlap_matrix);
+  Eigen::MatrixXd S_sqrt_inv = es.operatorInverseSqrt();
+  
+  // Transform Fock matrix
+  Eigen::MatrixXd F_prime = S_sqrt_inv * fock_matrix * S_sqrt_inv;
+  
+  // Diagonalize F'
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es_fock(F_prime);
+  mo_energies = es_fock.eigenvalues();
+  Eigen::MatrixXd C_prime = es_fock.eigenvectors();
+  
+  // Back-transform eigenvectors to non-orthogonal basis
+  mo_coefficients = S_sqrt_inv * C_prime;
+}
+
+/* ----------------------------------------------------------------------
+   Update density matrix from MO coefficients
+------------------------------------------------------------------------- */
+
+void PairDFT::update_density_matrix()
+{
+  // Save previous density
+  density_matrix_prev = density_matrix;
+  
+  // Build new density matrix from occupied orbitals
+  // D = 2 * C_occ * C_occ^T for closed shell
+  density_matrix.setZero();
+  
+  for (int i = 0; i < n_occupied_orbitals; i++) {
+    density_matrix += 2.0 * mo_coefficients.col(i) * mo_coefficients.col(i).transpose();
   }
 }
 
-void PairDFT::print_scf_iteration()
+/* ----------------------------------------------------------------------
+   Mix density matrices for convergence
+------------------------------------------------------------------------- */
+
+void PairDFT::mix_density_matrices(double mixing_param)
 {
-  if (comm->me == 0) {
-    double density_change = density_matrix->get_change();
-    double energy_change = (current_iteration == 1) ? 0.0 : 
-                          total_dft_energy - ((current_iteration > 1) ? total_dft_energy : 0.0);
-    
-    utils::logmesg(lmp, fmt::format("{:4d} {:15.8f} {:12.5e} {:12.5e}\n",
-                                    current_iteration, total_dft_energy,
-                                    energy_change, density_change));
-  }
+  // Simple linear mixing for stability
+  // D_new = (1-alpha)*D_old + alpha*D_current
+  density_matrix = mixing_param * density_matrix + (1.0 - mixing_param) * density_matrix_prev;
 }
 
-void PairDFT::print_scf_summary()
+/* ----------------------------------------------------------------------
+   Compute RMS density change
+------------------------------------------------------------------------- */
+
+double PairDFT::compute_density_change()
 {
-  if (comm->me == 0) {
-    utils::logmesg(lmp, "------------------------------------------------\n");
-    if (scf_converged) {
-      utils::logmesg(lmp, "SCF CONVERGED\n");
-    } else {
-      utils::logmesg(lmp, "SCF NOT CONVERGED\n");
+  Eigen::MatrixXd diff = density_matrix - density_matrix_prev;
+  double sum = 0.0;
+  int count = 0;
+  
+  for (int i = 0; i < n_basis_functions; i++) {
+    for (int j = 0; j < n_basis_functions; j++) {
+      sum += diff(i, j) * diff(i, j);
+      count++;
     }
-    utils::logmesg(lmp, "\nEnergy Components:\n");
-    utils::logmesg(lmp, fmt::format("  Kinetic:         {:15.8f}\n", kinetic_energy));
-    utils::logmesg(lmp, fmt::format("  Nuclear:         {:15.8f}\n", nuclear_repulsion));
-    utils::logmesg(lmp, fmt::format("  XC:              {:15.8f}\n", xc_energy));
-    utils::logmesg(lmp, fmt::format("  TOTAL:           {:15.8f}\n", total_dft_energy));
-    utils::logmesg(lmp, "================================================\n\n");
   }
+  
+  return sqrt(sum / count);
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Compute total energy
+------------------------------------------------------------------------- */
 
-void PairDFT::generate_grid(const std::vector<std::vector<double>> &atom_positions,
-                                   const std::vector<int> &atomic_numbers)
+void PairDFT::compute_energy()
+{
+  // Nuclear repulsion
+  nuclear_repulsion = compute_nuclear_repulsion_energy();
+  
+  // One-electron energy
+  Eigen::MatrixXd H_core = kinetic_matrix + nuclear_matrix;
+  double one_electron = (density_matrix.cwiseProduct(H_core)).sum();
+  
+  // Two-electron energy
+  double j_energy = (density_matrix.cwiseProduct(coulomb_matrix)).sum();
+  double k_energy = 0.0;
+  
+  if (is_hybrid) {
+    k_energy = hybrid_coeff * (density_matrix.cwiseProduct(exchange_matrix)).sum();
+  }
+  
+  // Kinetic energy component
+  kinetic_energy = (density_matrix.cwiseProduct(kinetic_matrix)).sum();
+  
+  // Total energy
+  total_dft_energy = nuclear_repulsion + one_electron + j_energy - k_energy + xc_energy;
+}
+
+/* ----------------------------------------------------------------------
+   Compute nuclear repulsion energy
+------------------------------------------------------------------------- */
+
+double PairDFT::compute_nuclear_repulsion_energy()
+{
+  double energy = 0.0;
+  
+  double **x = atom->x;
+  double *q = atom->q;  // Use atom->q for nuclear charges
+  int nlocal = atom->nlocal;
+  
+  for (int i = 0; i < nlocal; i++) {
+    for (int j = i + 1; j < nlocal; j++) {
+      double dx = x[i][0] - x[j][0];
+      double dy = x[i][1] - x[j][1];
+      double dz = x[i][2] - x[j][2];
+      double r = sqrt(dx*dx + dy*dy + dz*dz);
+      
+      if (r > 1e-10) {
+        energy += q[i] * q[j] / r;
+      }
+    }
+  }
+  
+  return energy;
+}
+
+/* ----------------------------------------------------------------------
+   Initialize density guess
+------------------------------------------------------------------------- */
+
+void PairDFT::initialize_density_guess()
+{
+  // Use core Hamiltonian guess
+  fock_matrix = kinetic_matrix + nuclear_matrix;
+  solve_roothaan_hall();
+  
+  // Determine number of occupied orbitals
+  n_electrons = 0;
+  double *q = atom->q;  // Use atom->q
+  int nlocal = atom->nlocal;
+  
+  for (int i = 0; i < nlocal; i++) {
+    const int atomic_number = 1;
+    n_electrons += (atomic_number + static_cast<int>(q[i]));
+  }
+  
+  n_occupied_orbitals = n_electrons / 2;  // Assuming closed-shell
+  
+  update_density_matrix();
+}
+
+/* ----------------------------------------------------------------------
+   Generate integration grid
+------------------------------------------------------------------------- */
+
+void PairDFT::generate_integration_grid()
 {
   grid_points.clear();
   grid_weights.clear();
-  becke_weights.clear();
   
-  int n_atoms = atom_positions.size();
-  if (n_atoms == 0) return;
+  double **x = atom->x;
+  double *q = atom->q;
+  int nlocal = atom->nlocal;
+  
+  if (nlocal == 0) return;
   
   // Generate atomic grids
-  int points_per_atom = target_grid_size / n_atoms;
+  int points_per_atom = grid_size / nlocal;
   
-  for (int atom = 0; atom < n_atoms; atom++) {
+  for (int atom_idx = 0; atom_idx < nlocal; atom_idx++) {
     // Get radial and angular grid sizes
     int n_radial = 50;  // Typical value
     int n_angular = points_per_atom / n_radial;
     
-    // Generate radial grid (Chebyshev-Gauss)
+    // Generate radial grid
     std::vector<double> r_points(n_radial);
     std::vector<double> r_weights(n_radial);
-    generate_radial_grid(n_radial, atomic_numbers[atom], r_points, r_weights);
+    generate_radial_grid(n_radial, q[atom_idx], r_points, r_weights);
     
-    // Generate angular grid (Lebedev)
+    // Generate angular grid
     std::vector<std::vector<double>> angular_points;
     std::vector<double> angular_weights;
     generate_lebedev_grid(n_angular, angular_points, angular_weights);
@@ -158,9 +280,9 @@ void PairDFT::generate_grid(const std::vector<std::vector<double>> &atom_positio
       
       for (size_t i_ang = 0; i_ang < angular_points.size(); i_ang++) {
         std::vector<double> point(3);
-        point[0] = atom_positions[atom][0] + r * angular_points[i_ang][0];
-        point[1] = atom_positions[atom][1] + r * angular_points[i_ang][1];
-        point[2] = atom_positions[atom][2] + r * angular_points[i_ang][2];
+        point[0] = x[atom_idx][0] + r * angular_points[i_ang][0];
+        point[1] = x[atom_idx][1] + r * angular_points[i_ang][1];
+        point[2] = x[atom_idx][2] + r * angular_points[i_ang][2];
         
         grid_points.push_back(point);
         grid_weights.push_back(w_r * angular_weights[i_ang] * r * r);
@@ -169,54 +291,25 @@ void PairDFT::generate_grid(const std::vector<std::vector<double>> &atom_positio
   }
   
   // Compute Becke partitioning weights
+  std::vector<std::vector<double>> atom_positions;
+  for (int i = 0; i < nlocal; i++) {
+    atom_positions.push_back({x[i][0], x[i][1], x[i][2]});
+  }
   compute_becke_weights(atom_positions);
 }
 
-/* ---------------------------------------------------------------------- */
-
-void PairDFT::generate_radial_grid(int n_points, double Z,
-                                          std::vector<double> &r,
-                                          std::vector<double> &w)
-{
-  // Chebyshev-Gauss radial grid
-  // Transform from [-1,1] to [0,inf) using appropriate mapping
-  
-  r.resize(n_points);
-  w.resize(n_points);
-  
-  // Bragg radius for scaling
-  double R_bragg = 1.0;  // Default, should depend on Z
-  if (Z > 0) {
-    R_bragg = 0.5 * (3.0 - 0.01 * Z);  // Simple approximation
-  }
-  
-  for (int i = 0; i < n_points; i++) {
-    // Chebyshev nodes
-    double xi = cos(M_PI * (i + 0.5) / n_points);
-    
-    // Becke transformation
-    double x = (1.0 + xi) / (1.0 - xi);
-    r[i] = R_bragg * x;
-    
-    // Weight includes Jacobian
-    w[i] = (M_PI / n_points) * 2.0 * R_bragg / ((1.0 - xi) * (1.0 - xi));
-  }
-}
-
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Generate Lebedev angular grid
+------------------------------------------------------------------------- */
 
 void PairDFT::generate_lebedev_grid(int n_points,
-                                           std::vector<std::vector<double>> &points,
-                                           std::vector<double> &weights)
+                                    std::vector<std::vector<double>> &points,
+                                    std::vector<double> &weights)
 {
-  // Simplified Lebedev grid generation
-  // Real implementation would use pre-computed Lebedev grids
-  
   points.clear();
   weights.clear();
   
   // Find closest available Lebedev grid
-  // Available sizes: 6, 14, 26, 38, 50, 74, 86, 110, 146, 170, 194, ...
   int actual_points = 50;  // Default to 50-point grid
   
   if (n_points <= 6) actual_points = 6;
@@ -230,8 +323,6 @@ void PairDFT::generate_lebedev_grid(int n_points,
   else actual_points = 194;
   
   // Generate points on unit sphere
-  // This is a simplified version - real Lebedev grids are more complex
-  
   if (actual_points == 6) {
     // Octahedron vertices
     points.push_back({1, 0, 0});
@@ -265,11 +356,42 @@ void PairDFT::generate_lebedev_grid(int n_points,
   }
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Generate radial grid
+------------------------------------------------------------------------- */
+
+void PairDFT::generate_radial_grid(int n_points, double Z,
+                                   std::vector<double> &r,
+                                   std::vector<double> &w)
+{
+  r.resize(n_points);
+  w.resize(n_points);
+  
+  // Bragg radius for scaling
+  double R_bragg = 1.0;
+  if (Z > 0) {
+    R_bragg = 0.5 * (3.0 - 0.01 * Z);
+  }
+  
+  for (int i = 0; i < n_points; i++) {
+    // Chebyshev nodes
+    double xi = cos(M_PI * (i + 0.5) / n_points);
+    
+    // Becke transformation
+    double x = (1.0 + xi) / (1.0 - xi);
+    r[i] = R_bragg * x;
+    
+    // Weight includes Jacobian
+    w[i] = (M_PI / n_points) * 2.0 * R_bragg / ((1.0 - xi) * (1.0 - xi));
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Compute Becke partitioning weights
+------------------------------------------------------------------------- */
 
 void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atoms)
 {
-  // Becke partitioning for multi-center integration
   int n_points = grid_points.size();
   int n_atoms = atoms.size();
   
@@ -325,8 +447,6 @@ void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atom
     }
     
     if (sum > 1e-15) {
-      // For simplicity, assign full weight to nearest atom
-      // Real implementation would properly partition weights
       becke_weights[i_point] = 1.0;
     } else {
       becke_weights[i_point] = 0.0;
@@ -334,33 +454,29 @@ void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atom
   }
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Integrate XC on grid
+------------------------------------------------------------------------- */
 
-void PairDFT::integrate_xc(XCFunctional *xc_func,
-                                  const Eigen::MatrixXd &density_matrix,
-                                  BasisSetManager *basis,
-                                  double &exc_energy,
-                                  Eigen::MatrixXd &vxc_matrix)
+void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matrix)
 {
-  int n_basis = basis->get_n_basis();
   int n_points = grid_points.size();
   
-  vxc_matrix.setZero(n_basis, n_basis);
+  vxc_matrix.setZero();
   exc_energy = 0.0;
   
   if (n_points == 0) return;
   
   // Evaluate basis functions at grid points
-  std::vector<std::vector<double>> basis_values(n_points, std::vector<double>(n_basis));
+  std::vector<std::vector<double>> basis_values;
   std::vector<std::vector<std::vector<double>>> basis_gradients;
   
-  if (xc_func->is_gga() || xc_func->is_meta()) {
-    basis_gradients.resize(n_points, 
-                          std::vector<std::vector<double>>(n_basis, 
-                                                          std::vector<double>(3)));
+  // FIXME IS THIS CORRECT ???
+  if (is_meta_gga) {
+    evaluate_basis_at_points(grid_points, basis_values, basis_gradients);
+  } else {
+    evaluate_basis_at_points(grid_points, basis_values, basis_gradients);
   }
-  
-  evaluate_basis_at_points(basis, basis_values, basis_gradients);
   
   // Compute density and gradients at grid points
   std::vector<double> rho(n_points, 0.0);
@@ -370,20 +486,18 @@ void PairDFT::integrate_xc(XCFunctional *xc_func,
   
   for (int i_point = 0; i_point < n_points; i_point++) {
     // Density
-    for (int i = 0; i < n_basis; i++) {
-      for (int j = 0; j < n_basis; j++) {
-        rho[i_point] += density_matrix(i, j) * 
-                        basis_values[i_point][i] * 
-                        basis_values[i_point][j];
+    for (int i = 0; i < n_basis_functions; i++) {
+      for (int j = 0; j < n_basis_functions; j++) {
+        rho[i_point] += density_matrix(i, j) * basis_values[i_point][i] * basis_values[i_point][j];
       }
     }
     
-    // Gradient and kinetic energy density for GGA/meta-GGA
-    if (xc_func->is_gga() || xc_func->is_meta()) {
+    // Gradient for GGA/meta-GGA
+    if (!basis_gradients.empty()) {
       std::vector<double> grad_rho(3, 0.0);
       
-      for (int i = 0; i < n_basis; i++) {
-        for (int j = 0; j < n_basis; j++) {
+      for (int i = 0; i < n_basis_functions; i++) {
+        for (int j = 0; j < n_basis_functions; j++) {
           double P_ij = density_matrix(i, j);
           
           for (int k = 0; k < 3; k++) {
@@ -391,7 +505,7 @@ void PairDFT::integrate_xc(XCFunctional *xc_func,
                                    basis_values[i_point][i] * basis_gradients[i_point][j][k]);
           }
           
-          if (xc_func->is_meta()) {
+          if (is_meta_gga) {
             for (int k = 0; k < 3; k++) {
               tau[i_point] += 0.5 * P_ij * 
                              basis_gradients[i_point][i][k] * 
@@ -401,9 +515,7 @@ void PairDFT::integrate_xc(XCFunctional *xc_func,
         }
       }
       
-      sigma[i_point] = grad_rho[0] * grad_rho[0] + 
-                       grad_rho[1] * grad_rho[1] + 
-                       grad_rho[2] * grad_rho[2];
+      sigma[i_point] = grad_rho[0]*grad_rho[0] + grad_rho[1]*grad_rho[1] + grad_rho[2]*grad_rho[2];
     }
   }
   
@@ -414,12 +526,11 @@ void PairDFT::integrate_xc(XCFunctional *xc_func,
   std::vector<double> vlapl(n_points);
   std::vector<double> vtau(n_points);
   
-  xc_func->evaluate(rho, sigma, lapl, tau, exc, vrho, vsigma, vlapl, vtau);
+  evaluate_xc_functional(rho, sigma, lapl, tau, exc, vrho, vsigma, vlapl, vtau);
   
   // Integrate XC energy
   for (int i_point = 0; i_point < n_points; i_point++) {
-    exc_energy += exc[i_point] * rho[i_point] * 
-                  grid_weights[i_point] * becke_weights[i_point];
+    exc_energy += exc[i_point] * rho[i_point] * grid_weights[i_point] * becke_weights[i_point];
   }
   
   // Build XC potential matrix
@@ -427,96 +538,156 @@ void PairDFT::integrate_xc(XCFunctional *xc_func,
     double w = grid_weights[i_point] * becke_weights[i_point];
     
     // LDA contribution
-    for (int i = 0; i < n_basis; i++) {
+    for (int i = 0; i < n_basis_functions; i++) {
       for (int j = 0; j <= i; j++) {
-        double val = vrho[i_point] * basis_values[i_point][i] * 
-                    basis_values[i_point][j] * w;
+        double val = vrho[i_point] * basis_values[i_point][i] * basis_values[i_point][j] * w;
         vxc_matrix(i, j) += val;
         if (i != j) vxc_matrix(j, i) += val;
       }
     }
     
-    // GGA contribution
-    if (xc_func->is_gga() && vsigma[i_point] != 0.0) {
-      // Simplified - full implementation would include gradient contributions
-      // This requires second derivatives of basis functions
+    // FIXME
+    // GGA and meta-GGA contributions would go here
+    // (simplified for now)
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Compute Hellmann-Feynman forces
+------------------------------------------------------------------------- */
+
+void PairDFT::compute_hellmann_feynman_forces()
+{
+  double **f = atom->f;
+  double **x = atom->x;
+  double *q = atom->q;  // Use atom->q
+  int nlocal = atom->nlocal;
+  
+  // Nuclear-nuclear repulsion gradient
+  for (int i = 0; i < nlocal; i++) {
+    for (int j = 0; j < nlocal; j++) {
+      if (i != j) {
+        double dx = x[i][0] - x[j][0];
+        double dy = x[i][1] - x[j][1];
+        double dz = x[i][2] - x[j][2];
+        double r = sqrt(dx*dx + dy*dy + dz*dz);
+        
+        if (r > 1e-10) {
+          double force_mag = q[i] * q[j] / (r * r * r);
+          f[i][0] += force_mag * dx;
+          f[i][1] += force_mag * dy;
+          f[i][2] += force_mag * dz;
+        }
+      }
     }
-    
-    // Meta-GGA contribution
-    if (xc_func->is_meta() && vtau[i_point] != 0.0) {
-      // Simplified - full implementation would include tau contributions
+  }
+  
+  // Electronic contribution to forces
+  std::vector<Eigen::MatrixXd> dV(3 * nlocal);
+  compute_nuclear_gradient(dV);
+  
+  for (int i = 0; i < nlocal; i++) {
+    for (int k = 0; k < 3; k++) {
+      double force_component = (density_matrix.cwiseProduct(dV[3*i + k])).sum();
+      f[i][k] -= 2.0 * force_component;  // Factor of 2 for closed shell
     }
   }
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Compute Pulay forces
+------------------------------------------------------------------------- */
 
-void PairDFT::evaluate_basis_at_points(BasisSetManager *basis,
-                                              std::vector<std::vector<double>> &basis_values,
-                                              std::vector<std::vector<std::vector<double>>> &basis_gradients)
+void PairDFT::compute_pulay_forces()
 {
-  int n_points = grid_points.size();
-  int n_basis = basis->get_n_basis();
-  int n_shells = basis->get_n_shells();
+  double **f = atom->f;
+  int nlocal = atom->nlocal;
   
-  // For each grid point, evaluate all basis functions
-  for (int i_point = 0; i_point < n_points; i_point++) {
-    int bf_idx = 0;
-    
-    for (int shell = 0; shell < n_shells; shell++) {
-      int l = basis->get_angular_momentum(shell);
-      auto exponents = basis->get_exponents(shell);
-      auto coefficients = basis->get_coefficients(shell);
-      
-      // Number of functions in this shell
-      int n_funcs = (l + 1) * (l + 2) / 2;
-      
-      // Evaluate contracted Gaussian
-      for (int func = 0; func < n_funcs; func++) {
-        double value = 0.0;
-        
-        // Contract over primitives
-        for (size_t prim = 0; prim < exponents.size(); prim++) {
-          double alpha = exponents[prim];
-          double coeff = coefficients[prim];
-          
-          // Distance from basis function center (assuming at origin for now)
-          double r2 = 0.0;
-          for (int k = 0; k < 3; k++) {
-            r2 += grid_points[i_point][k] * grid_points[i_point][k];
-          }
-          
-          // Gaussian value
-          double gauss = coeff * exp(-alpha * r2);
-          
-          // Add angular part (simplified - should use spherical harmonics)
-          if (l == 0) {
-            // s-orbital
-            value += gauss;
-          } else if (l == 1) {
-            // p-orbitals (px, py, pz)
-            if (func < 3) {
-              value += gauss * grid_points[i_point][func];
-            }
-          } else if (l == 2) {
-            // d-orbitals (simplified)
-            value += gauss * pow(grid_points[i_point][func % 3], 2);
-          }
-        }
-        
-        basis_values[i_point][bf_idx] = value;
-        
-        // Compute gradients if needed
-        if (!basis_gradients.empty()) {
-          // Simplified gradient - full implementation would be more complex
-          for (int k = 0; k < 3; k++) {
-            basis_gradients[i_point][bf_idx][k] = 
-              -2.0 * exponents[0] * grid_points[i_point][k] * value;
-          }
-        }
-        
-        bf_idx++;
-      }
+  // Energy-weighted density matrix
+  Eigen::MatrixXd W = Eigen::MatrixXd::Zero(n_basis_functions, n_basis_functions);
+  
+  for (int i = 0; i < n_occupied_orbitals; i++) {
+    W += 2.0 * mo_energies(i) * mo_coefficients.col(i) * mo_coefficients.col(i).transpose();
+  }
+  
+  // Compute overlap gradient
+  std::vector<Eigen::MatrixXd> dS(3 * nlocal);
+  compute_overlap_gradient(dS);
+  
+  // Pulay force contribution
+  for (int i = 0; i < nlocal; i++) {
+    for (int k = 0; k < 3; k++) {
+      double force_component = -(W.cwiseProduct(dS[3*i + k])).sum();
+      f[i][k] += force_component;
     }
+  }
+}
+
+/* ----------------------------------------------------------------------
+   SCF output methods
+------------------------------------------------------------------------- */
+
+void PairDFT::print_scf_header()
+{
+  if (comm->me == 0) {
+    utils::logmesg(lmp, "\n");
+    utils::logmesg(lmp, "================================================\n");
+    utils::logmesg(lmp, "            DFT SCF CALCULATION\n");
+    utils::logmesg(lmp, "================================================\n");
+    utils::logmesg(lmp, fmt::format("Functional: {}\n", functional_name));
+    utils::logmesg(lmp, fmt::format("Basis functions: {}\n", n_basis_functions));
+    utils::logmesg(lmp, fmt::format("Electrons: {}\n", n_electrons));
+    utils::logmesg(lmp, fmt::format("Grid points: {}\n", grid_size));
+    utils::logmesg(lmp, "------------------------------------------------\n");
+    utils::logmesg(lmp, " Iter    Energy (Eh)    Delta E      RMS Dens\n");
+    utils::logmesg(lmp, "------------------------------------------------\n");
+  }
+}
+
+void PairDFT::print_scf_iteration()
+{
+  if (comm->me == 0) {
+    double density_change = compute_density_change();
+    double energy_change = (current_iteration == 1) ? 0.0 : 
+                          total_dft_energy - ((current_iteration > 1) ? total_dft_energy : 0.0);
+    
+    utils::logmesg(lmp, fmt::format("{:4d} {:15.8f} {:12.5e} {:12.5e}\n",
+                                    current_iteration, total_dft_energy,
+                                    energy_change, density_change));
+  }
+}
+
+void PairDFT::print_scf_summary()
+{
+  if (comm->me == 0) {
+  
+    double energy_conversion = 1.0;
+    std::string energy_units;
+    
+    if (strcmp(update->unit_style,"metal") == 0) {
+      energy_conversion = 27.211386245981;
+      energy_units = "eV";
+    } else if (strcmp(update->unit_style,"real") == 0) {
+      energy_conversion = 627.5094740631;
+      energy_units = "kcal/mol";
+    }
+    utils::logmesg(lmp, "------------------------------------------------\n");
+    if (scf_converged) utils::logmesg(lmp, "SCF CONVERGED\n");
+    else utils::logmesg(lmp, "SCF NOT CONVERGED\n");
+    utils::logmesg(lmp, "\nEnergy Components:\n");
+    
+    utils::logmesg(lmp, fmt::format("  Kinetic: {:15.8f} Eh {:15.8f} {}\n",
+      kinetic_energy, kinetic_energy*energy_conversion, energy_units));
+    
+    utils::logmesg(lmp, fmt::format("  Nuclear: {:15.8f} Eh {:15.8f} {}\n",
+      nuclear_repulsion, nuclear_repulsion*energy_conversion, energy_units));
+    
+    utils::logmesg(lmp, fmt::format("  XC:      {:15.8f} Eh {:15.8f} {}\n",
+      xc_energy, xc_energy*energy_conversion, energy_units));
+    
+    utils::logmesg(lmp, fmt::format("  TOTAL:   {:15.8f} Eh {:15.8f} {}\n",
+      total_dft_energy, total_dft_energy*energy_conversion, energy_units));
+    
+    utils::logmesg(lmp, "================================================\n\n");
   }
 }
