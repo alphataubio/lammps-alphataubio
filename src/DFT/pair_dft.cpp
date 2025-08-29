@@ -106,20 +106,6 @@ void PairDFT::compute(int eflag, int vflag)
   // Initialize basis set and integral engines if needed
   if (n_basis_functions == 0) initialize_basis_set();
   
-  // Update basis set positions with current atom positions
-  std::vector<std::vector<double>> positions;
-  double **x = atom->x;
-  int nlocal = atom->nlocal;
-  
-  for (int i = 0; i < nlocal; i++) {
-    positions.push_back({
-      x[i][0] * ANGSTROM_TO_BOHR,
-      x[i][1] * ANGSTROM_TO_BOHR,
-      x[i][2] * ANGSTROM_TO_BOHR
-    });
-  }
-  set_atom_positions(positions);
-  
   // Perform SCF calculation for the current configuration
   perform_scf();
   
