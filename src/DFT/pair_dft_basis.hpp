@@ -147,6 +147,12 @@ void PairDFT::load_basis_from_json(const std::string &filename)
             // s: 1, p: 3, d: 6, f: 10, g: 15
             int n_funcs = (element_am[s] + 1) * (element_am[s] + 2) / 2;
             n_basis_functions += n_funcs;
+            
+            if (comm->me == 0) {
+              utils::logmesg(lmp, fmt::format("Added shell {} for atom {}: l={}, n_exp={}, n_coeff={}, n_funcs={}\n",
+                                             n_shells-1, atom_idx, element_am[s], 
+                                             element_exp[s].size(), element_coeff[s].size(), n_funcs));
+            }
           }
         }
       }
@@ -155,11 +161,15 @@ void PairDFT::load_basis_from_json(const std::string &filename)
   
   // Skip normalization - basis sets from BSE are already normalized
   // normalize_basis_functions();
-  normalized_coefficients = coefficients;  // Use coefficients as-is
+  // Don't set normalized_coefficients, just use coefficients directly
   
   if (comm->me == 0) {
     utils::logmesg(lmp, fmt::format("Loaded basis set with {} shells and {} basis functions\n", 
                                     n_shells, n_basis_functions));
+    utils::logmesg(lmp, fmt::format("  exponents.size() = {}\n", exponents.size()));
+    utils::logmesg(lmp, fmt::format("  coefficients.size() = {}\n", coefficients.size()));
+    utils::logmesg(lmp, fmt::format("  angular_momentum.size() = {}\n", angular_momentum.size()));
+    utils::logmesg(lmp, fmt::format("  shell_to_atom.size() = {}\n", shell_to_atom.size()));
   }
 }
 
@@ -217,15 +227,6 @@ double PairDFT::compute_normalization(int l, double exponent)
 }
 
 /* ----------------------------------------------------------------------
-   Set atom positions for basis functions
-------------------------------------------------------------------------- */
-
-void PairDFT::set_atom_positions(const std::vector<std::vector<double>> &positions)
-{
-  atom_positions = positions;
-}
-
-/* ----------------------------------------------------------------------
    Get angular momentum for shell
 ------------------------------------------------------------------------- */
 
@@ -241,7 +242,8 @@ int PairDFT::get_angular_momentum(int shell) const
 
 std::vector<double> PairDFT::get_exponents(int shell) const
 {
-  if (shell < 0 || shell >= n_shells) return std::vector<double>();
+  if (shell < 0 || shell >= n_shells || shell >= exponents.size()) 
+    return std::vector<double>();
   return exponents[shell];
 }
 
@@ -251,8 +253,10 @@ std::vector<double> PairDFT::get_exponents(int shell) const
 
 std::vector<double> PairDFT::get_coefficients(int shell) const
 {
-  if (shell < 0 || shell >= n_shells) return std::vector<double>();
-  return normalized_coefficients.empty() ? coefficients[shell] : normalized_coefficients[shell];
+  if (shell < 0 || shell >= n_shells || shell >= coefficients.size()) 
+    return std::vector<double>();
+  // Always return from coefficients since we're not normalizing
+  return coefficients[shell];
 }
 
 /* ----------------------------------------------------------------------
@@ -283,6 +287,12 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
   int n_points = points.size();
   basis_values.resize(n_points, std::vector<double>(n_basis_functions));
   
+  // Debug check
+  if (comm->me == 0) {
+    utils::logmesg(lmp, fmt::format("evaluate_basis_at_points: n_shells={}, exponents.size()={}, coefficients.size()={}\n",
+                                    n_shells, exponents.size(), coefficients.size()));
+  }
+  
   bool need_gradients = !basis_gradients.empty();
   if (need_gradients) {
     basis_gradients.resize(n_points, 
@@ -290,20 +300,48 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
                                                           std::vector<double>(3)));
   }
   
+  // Get current atom positions from LAMMPS atom structure
+  double **x = atom->x;
+  int nlocal = atom->nlocal;
+  
   // For each grid point, evaluate all basis functions
   for (int i_point = 0; i_point < n_points; i_point++) {
     int bf_idx = 0;
     
     for (int shell = 0; shell < n_shells; shell++) {
       int l = angular_momentum[shell];
-      auto shell_exponents = get_exponents(shell);
-      auto shell_coefficients = get_coefficients(shell);
+      
+      // Bounds checking for exponents and coefficients
+      if (shell >= exponents.size() || shell >= coefficients.size()) {
+        if (comm->me == 0) {
+          error->warning(FLERR, fmt::format("Shell {} out of bounds (exp size={}, coeff size={})", 
+                                           shell, exponents.size(), coefficients.size()));
+        }
+        continue;
+      }
+      
+      auto shell_exponents = exponents[shell];
+      auto shell_coefficients = coefficients[shell];
       int atom_id = shell_to_atom[shell];
       
-      // Get atom position (default to origin if not set)
-      std::vector<double> atom_pos = {0.0, 0.0, 0.0};
-      if (atom_id < atom_positions.size()) {
-        atom_pos = atom_positions[atom_id];
+      // Skip if exponents or coefficients are empty
+      if (shell_exponents.empty() || shell_coefficients.empty()) {
+        if (comm->me == 0) {
+          error->warning(FLERR, fmt::format("Shell {} has empty exponents or coefficients", shell));
+        }
+        // Still need to advance bf_idx for the basis functions of this shell
+        std::vector<std::vector<int>> cart_indices;
+        get_cartesian_indices(l, cart_indices);
+        bf_idx += cart_indices.size();
+        continue;
+      }
+      
+      // Get atom position directly from LAMMPS
+      std::vector<double> atom_pos(3, 0.0);
+      if (atom_id >= 0 && atom_id < nlocal) {
+        atom_pos[0] = x[atom_id][0] * ANGSTROM_TO_BOHR;
+        atom_pos[1] = x[atom_id][1] * ANGSTROM_TO_BOHR;
+        atom_pos[2] = x[atom_id][2] * ANGSTROM_TO_BOHR;
       }
       
       // Calculate distance vector from atom to grid point
