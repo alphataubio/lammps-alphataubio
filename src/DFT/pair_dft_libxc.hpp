@@ -149,9 +149,7 @@ void PairDFT::initialize_libxc_functional()
       is_hybrid = true;
       hybrid_coeff = xc_hyb_exx_coef(xc_func_xc);
     }
-    if (family == XC_FAMILY_MGGA || family == XC_FAMILY_HYB_MGGA) {
-      is_meta_gga = true;
-    }
+    if (family == XC_FAMILY_MGGA || family == XC_FAMILY_HYB_MGGA) is_meta_gga = true;
     
     if (comm->me == 0) {
       const char *func_name = xc_func_info_get_name(info);
@@ -176,9 +174,7 @@ void PairDFT::initialize_libxc_functional()
         is_hybrid = true;
         hybrid_coeff = xc_hyb_exx_coef(xc_func_x);
       }
-      if (family == XC_FAMILY_MGGA || family == XC_FAMILY_HYB_MGGA) {
-        is_meta_gga = true;
-      }
+      if (family == XC_FAMILY_MGGA || family == XC_FAMILY_HYB_MGGA) is_meta_gga = true;
     }
     
     if (xc_functional_c >= 0) {
@@ -189,10 +185,7 @@ void PairDFT::initialize_libxc_functional()
       
       const xc_func_info_type *info = xc_func_get_info(xc_func_c);
       int family = xc_func_info_get_family(info);
-      
-      if (family == XC_FAMILY_MGGA) {
-        is_meta_gga = true;
-      }
+      if (family == XC_FAMILY_MGGA) is_meta_gga = true;
     }
     
     if (comm->me == 0) {
@@ -263,8 +256,7 @@ void PairDFT::evaluate_xc_functional(const std::vector<double> &rho,
         xc_lda_exc_vxc(xc_func_xc, n, rho.data(), exc.data(), vrho.data());
       } else {
         // GGA
-        xc_gga_exc_vxc(xc_func_xc, n, rho.data(), sigma.data(), 
-                       exc.data(), vrho.data(), vsigma.data());
+        xc_gga_exc_vxc(xc_func_xc, n, rho.data(), sigma.data(), exc.data(), vrho.data(), vsigma.data());
       }
     } else {
       // Meta-GGA
@@ -304,8 +296,7 @@ void PairDFT::evaluate_xc_functional(const std::vector<double> &rho,
       if (family == XC_FAMILY_LDA) {
         xc_lda_exc_vxc(xc_func_c, n, rho.data(), ec.data(), vc_rho.data());
       } else if (family == XC_FAMILY_GGA) {
-        xc_gga_exc_vxc(xc_func_c, n, rho.data(), sigma.data(),
-                       ec.data(), vc_rho.data(), vc_sigma.data());
+        xc_gga_exc_vxc(xc_func_c, n, rho.data(), sigma.data(), ec.data(), vc_rho.data(), vc_sigma.data());
       } else if (family == XC_FAMILY_MGGA) {
         xc_mgga_exc_vxc(xc_func_c, n, rho.data(), sigma.data(),
                         lapl.data(), tau.data(),
@@ -318,15 +309,9 @@ void PairDFT::evaluate_xc_functional(const std::vector<double> &rho,
     for (int i = 0; i < n; i++) {
       exc[i] = ex[i] + ec[i];
       vrho[i] = vx_rho[i] + vc_rho[i];
-      if (!vsigma.empty()) {
-        vsigma[i] = vx_sigma[i] + vc_sigma[i];
-      }
-      if (!vlapl.empty()) {
-        vlapl[i] = vx_lapl[i] + vc_lapl[i];
-      }
-      if (!vtau.empty()) {
-        vtau[i] = vx_tau[i] + vc_tau[i];
-      }
+      if (!vsigma.empty()) vsigma[i] = vx_sigma[i] + vc_sigma[i];
+      if (!vlapl.empty()) vlapl[i] = vx_lapl[i] + vc_lapl[i];
+      if (!vtau.empty()) vtau[i] = vx_tau[i] + vc_tau[i];
     }
   }
 }

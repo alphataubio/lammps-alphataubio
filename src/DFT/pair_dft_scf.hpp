@@ -205,13 +205,9 @@ double PairDFT::compute_nuclear_repulsion_energy()
       double dy = x[i][1] - x[j][1];
       double dz = x[i][2] - x[j][2];
       double r = sqrt(dx*dx + dy*dy + dz*dz);
-      
-      if (r > 1e-10) {
-        energy += q[i] * q[j] / r;
-      }
+      if (r > 1e-10) energy += q[i] * q[j] / r;
     }
   }
-  
   return energy;
 }
 
@@ -369,9 +365,7 @@ void PairDFT::generate_radial_grid(int n_points, double Z,
   
   // Bragg radius for scaling
   double R_bragg = 1.0;
-  if (Z > 0) {
-    R_bragg = 0.5 * (3.0 - 0.01 * Z);
-  }
+  if (Z > 0) R_bragg = 0.5 * (3.0 - 0.01 * Z);
   
   for (int i = 0; i < n_points; i++) {
     // Chebyshev nodes
@@ -431,9 +425,7 @@ void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atom
         
         // Becke's step function with smoothing
         double f = mu;
-        for (int iter = 0; iter < 3; iter++) {
-          f = 0.5 * f * (3.0 - f * f);
-        }
+        for (int iter = 0; iter < 3; iter++) f = 0.5 * f * (3.0 - f * f);
         double s = 0.5 * (1.0 - f);
         
         P[i_atom] *= s;
@@ -442,15 +434,11 @@ void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atom
     
     // Normalize partition functions
     double sum = 0.0;
-    for (int i_atom = 0; i_atom < n_atoms; i_atom++) {
-      sum += P[i_atom];
-    }
+    for (int i_atom = 0; i_atom < n_atoms; i_atom++) sum += P[i_atom];
     
-    if (sum > 1e-15) {
-      becke_weights[i_point] = 1.0;
-    } else {
-      becke_weights[i_point] = 0.0;
-    }
+    if (sum > 1e-15) becke_weights[i_point] = 1.0;
+    else becke_weights[i_point] = 0.0;
+
   }
 }
 
@@ -507,9 +495,7 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
           
           if (is_meta_gga) {
             for (int k = 0; k < 3; k++) {
-              tau[i_point] += 0.5 * P_ij * 
-                             basis_gradients[i_point][i][k] * 
-                             basis_gradients[i_point][j][k];
+              tau[i_point] += 0.5 * P_ij * basis_gradients[i_point][i][k] * basis_gradients[i_point][j][k];
             }
           }
         }
