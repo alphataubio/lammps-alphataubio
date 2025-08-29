@@ -38,8 +38,6 @@ using namespace LAMMPS_NS;
 #include "pair_dft_libint2.hpp"
 #include "pair_dft_scf.hpp"
 
-static constexpr double ANGSTROM_TO_BOHR = 1/0.52917721067;
-
 /* ---------------------------------------------------------------------- */
 
 PairDFT::PairDFT(LAMMPS *lmp) : Pair(lmp)
@@ -112,13 +110,9 @@ void PairDFT::compute(int eflag, int vflag)
   int nlocal = atom->nlocal;
   
   for (int i = 0; i < nlocal; i++) {
-    positions.push_back({
-      x[i][0] * ANGSTROM_TO_BOHR,
-      x[i][1] * ANGSTROM_TO_BOHR,
-      x[i][2] * ANGSTROM_TO_BOHR
-    });
+    positions.push_back({x[i][0], x[i][1], x[i][2]});
   }
-  set_atom_positions(positions);
+  //set_atom_positions(positions);
   
   // Perform SCF calculation for the current configuration
   perform_scf();
