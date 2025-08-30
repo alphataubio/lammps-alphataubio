@@ -159,9 +159,8 @@ void PairDFT::load_basis_from_json(const std::string &filename)
     }
   }
   
-  // Skip normalization - basis sets from BSE are already normalized
-  // normalize_basis_functions();
-  // Don't set normalized_coefficients, just use coefficients directly
+  // Normalize the contracted basis functions
+  normalize_basis_functions();
   
   if (comm->me == 0) {
     utils::logmesg(lmp, fmt::format("Loaded basis set with {} shells and {} basis functions\n", 
@@ -185,11 +184,43 @@ void PairDFT::normalize_basis_functions()
     int l = angular_momentum[shell];
     std::vector<double> norm_coeffs;
     
+    // First, normalize each primitive
+    std::vector<double> prim_norms;
     for (size_t i = 0; i < exponents[shell].size(); i++) {
       double alpha = exponents[shell][i];
       double norm = compute_normalization(l, alpha);
-      double coeff = coefficients[shell][i];
-      norm_coeffs.push_back(coeff * norm);
+      prim_norms.push_back(norm);
+    }
+    
+    // Compute overlap of the contracted function with itself
+    double S_contracted = 0.0;
+    for (size_t i = 0; i < exponents[shell].size(); i++) {
+      for (size_t j = 0; j < exponents[shell].size(); j++) {
+        double alpha_i = exponents[shell][i];
+        double alpha_j = exponents[shell][j];
+        double coeff_i = coefficients[shell][i] * prim_norms[i];
+        double coeff_j = coefficients[shell][j] * prim_norms[j];
+        
+        // Overlap between two primitives with same center
+        double overlap = pow(M_PI / (alpha_i + alpha_j), 1.5);
+        if (l > 0) {
+          // Add angular momentum factor
+          double factor = 1.0;
+          for (int k = 0; k < l; k++) {
+            factor *= (2*k + 1) / (2.0 * (alpha_i + alpha_j));
+          }
+          overlap *= factor;
+        }
+        
+        S_contracted += coeff_i * coeff_j * overlap;
+      }
+    }
+    
+    // Normalize the contracted function
+    double contraction_norm = 1.0 / sqrt(S_contracted);
+    
+    for (size_t i = 0; i < exponents[shell].size(); i++) {
+      norm_coeffs.push_back(coefficients[shell][i] * prim_norms[i] * contraction_norm);
     }
     
     normalized_coefficients.push_back(norm_coeffs);
@@ -253,10 +284,17 @@ std::vector<double> PairDFT::get_exponents(int shell) const
 
 std::vector<double> PairDFT::get_coefficients(int shell) const
 {
-  if (shell < 0 || shell >= n_shells || shell >= coefficients.size()) 
+  if (shell < 0 || shell >= n_shells) 
     return std::vector<double>();
-  // Always return from coefficients since we're not normalizing
-  return coefficients[shell];
+  
+  // Return normalized coefficients if available, otherwise raw coefficients
+  if (!normalized_coefficients.empty() && shell < normalized_coefficients.size()) {
+    return normalized_coefficients[shell];
+  } else if (shell < coefficients.size()) {
+    return coefficients[shell];
+  }
+  
+  return std::vector<double>();
 }
 
 /* ----------------------------------------------------------------------
@@ -287,10 +325,12 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
   int n_points = points.size();
   basis_values.resize(n_points, std::vector<double>(n_basis_functions));
   
-  // Debug check
-  if (comm->me == 0) {
+  // Debug check - only on first call
+  static bool first_call = true;
+  if (comm->me == 0 && first_call) {
     utils::logmesg(lmp, fmt::format("evaluate_basis_at_points: n_shells={}, exponents.size()={}, coefficients.size()={}\n",
                                     n_shells, exponents.size(), coefficients.size()));
+    first_call = false;
   }
   
   bool need_gradients = !basis_gradients.empty();
@@ -332,19 +372,9 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
       int l = angular_momentum[shell];
       int atom_id = shell_to_atom[shell];
       
-      // Make local copies of the vectors to ensure they're valid
-      std::vector<double> shell_exponents;
-      std::vector<double> shell_coefficients;
-      
-      try {
-        shell_exponents = exponents.at(shell);
-        shell_coefficients = coefficients.at(shell);
-      } catch (const std::exception& e) {
-        if (comm->me == 0) {
-          error->warning(FLERR, fmt::format("Failed to get shell {} data: {}", shell, e.what()));
-        }
-        continue;
-      }
+      // Get shell data using the accessor functions
+      std::vector<double> shell_exponents = get_exponents(shell);
+      std::vector<double> shell_coefficients = get_coefficients(shell);
       
       // Skip if exponents or coefficients are empty
       if (shell_exponents.empty() || shell_coefficients.empty()) {
@@ -358,11 +388,11 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
         continue;
       }
       
-      // Debug: print first exponent and coefficient
-      if (comm->me == 0 && i_point == 0) {
-        utils::logmesg(lmp, fmt::format("Shell {}: first exp={}, first coeff={}\n",
-                                        shell, shell_exponents[0], shell_coefficients[0]));
-      }
+      // Debug: print first exponent and coefficient - disabled for now
+      // if (comm->me == 0 && i_point == 0) {
+      //   utils::logmesg(lmp, fmt::format("Shell {}: first exp={}, first coeff={}\n",
+      //                                   shell, shell_exponents[0], shell_coefficients[0]));
+      // }
       
       // Get atom position directly from LAMMPS
       std::vector<double> atom_pos(3, 0.0);
@@ -370,12 +400,6 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
         atom_pos[0] = x[atom_id][0] * ANGSTROM_TO_BOHR;
         atom_pos[1] = x[atom_id][1] * ANGSTROM_TO_BOHR;
         atom_pos[2] = x[atom_id][2] * ANGSTROM_TO_BOHR;
-        
-        if (i_point == 0 && comm->me == 0) {
-          utils::logmesg(lmp, fmt::format("  Atom {}: pos=({}, {}, {}) Angstrom = ({}, {}, {}) Bohr\n",
-                                          atom_id, x[atom_id][0], x[atom_id][1], x[atom_id][2],
-                                          atom_pos[0], atom_pos[1], atom_pos[2]));
-        }
       }
       
       // Calculate distance vector from atom to grid point
@@ -384,19 +408,42 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
       double dz = points[i_point][2] - atom_pos[2];
       double r2 = dx*dx + dy*dy + dz*dz;
       
+      // Debug extreme displacements
+      if (i_point == 0 && shell == 0 && comm->me == 0) {
+        utils::logmesg(lmp, fmt::format("    Grid point 0: ({:.3f}, {:.3f}, {:.3f}) Bohr\n", 
+                                        points[i_point][0], points[i_point][1], points[i_point][2]));
+        utils::logmesg(lmp, fmt::format("    Displacement: dx={:.3f}, dy={:.3f}, dz={:.3f} Bohr, r={:.3f} Bohr\n", 
+                                        dx, dy, dz, sqrt(r2)));
+      }
+      
+      // Skip if grid point is too far from atom (basis function will be negligible)
+      // Cutoff at 10 Bohr is reasonable for most basis sets
+      const double cutoff_r2 = 100.0;  // 10^2 Bohr^2
+      if (r2 > cutoff_r2) {
+        // Set all basis functions in this shell to zero at this point
+        std::vector<std::vector<int>> cart_indices;
+        get_cartesian_indices(l, cart_indices);
+        for (size_t func = 0; func < cart_indices.size(); func++) {
+          if (bf_idx < n_basis_functions) {
+            basis_values[i_point][bf_idx] = 0.0;
+            if (need_gradients && i_point < basis_gradients.size() && 
+                bf_idx < basis_gradients[i_point].size()) {
+              basis_gradients[i_point][bf_idx][0] = 0.0;
+              basis_gradients[i_point][bf_idx][1] = 0.0;
+              basis_gradients[i_point][bf_idx][2] = 0.0;
+            }
+            bf_idx++;
+          }
+        }
+        continue;  // Skip to next shell
+      }
+      
       // Get Cartesian indices for this angular momentum
       std::vector<std::vector<int>> cart_indices;
       get_cartesian_indices(l, cart_indices);
       
       // Evaluate each Cartesian Gaussian in the shell
       for (size_t func = 0; func < cart_indices.size(); func++) {
-        if (i_point == 0 && comm->me == 0) {
-          utils::logmesg(lmp, fmt::format("  Shell {} func {}/{}: cart_indices.size()={}\n", 
-                                          shell, func, cart_indices.size(), cart_indices.size()));
-          if (func < cart_indices.size() && !cart_indices[func].empty()) {
-            utils::logmesg(lmp, fmt::format("    cart_indices[{}] size={}\n", func, cart_indices[func].size()));
-          }
-        }
         
         // Safety check
         if (func >= cart_indices.size() || cart_indices[func].size() < 3) {
@@ -444,11 +491,6 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
           double alpha = shell_exponents[prim];
           double coeff = shell_coefficients[prim];
           
-          // Debug output for first point
-          if (i_point == 0 && comm->me == 0) {
-            utils::logmesg(lmp, fmt::format("  Shell {} prim {}: alpha={}, coeff={}\n", shell, prim, alpha, coeff));
-          }
-          
           // Gaussian exponential part
           double gauss_exp = exp(-alpha * r2);
           
@@ -469,13 +511,15 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
             
             // Gradient of N * exp(-alpha*r^2) * x^nx * y^ny * z^nz
             // d/dx = N * exp(-alpha*r^2) * y^ny * z^nz * (nx * x^(nx-1) - 2*alpha*x * x^nx)
+            //      = N * exp(-alpha*r^2) * y^ny * z^nz * x^(nx-1) * (nx - 2*alpha*x^2)
+            // But be careful: when nx=0, x^(nx-1) = x^(-1) is undefined!
             
             double grad_x, grad_y, grad_z;
             
             // x-component
             if (nx > 0) {
               grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
-                      pow(dx, nx-1) * (nx - 2*alpha*dx*dx);
+                      (nx * pow(dx, nx-1) - 2*alpha*dx * pow(dx, nx));
             } else {
               grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
                       (-2*alpha*dx);
@@ -484,7 +528,7 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
             // y-component
             if (ny > 0) {
               grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
-                      pow(dy, ny-1) * (ny - 2*alpha*dy*dy);
+                      (ny * pow(dy, ny-1) - 2*alpha*dy * pow(dy, ny));
             } else {
               grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
                       (-2*alpha*dy);
@@ -493,7 +537,7 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
             // z-component
             if (nz > 0) {
               grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
-                      pow(dz, nz-1) * (nz - 2*alpha*dz*dz);
+                      (nz * pow(dz, nz-1) - 2*alpha*dz * pow(dz, nz));
             } else {
               grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
                       (-2*alpha*dz);
