@@ -173,28 +173,42 @@ void PairDFT::compute_energy()
   // Nuclear repulsion
   nuclear_repulsion = compute_nuclear_repulsion_energy();
   
-  // One-electron energy
+  // One-electron energy: Tr(P * H_core)
   Eigen::MatrixXd H_core = kinetic_matrix + nuclear_matrix;
   double one_electron = (density_matrix.cwiseProduct(H_core)).sum();
   
-  // Two-electron energy (J and K contributions)
-  // For closed-shell: E = Tr(P*H) + 0.5*Tr(P*G)
-  // where G = 2*J - K for RHF or 2*J - alpha*K for hybrid DFT
-  // and P is the total density matrix (factor of 2 already included)
-  double j_energy = (density_matrix.cwiseProduct(coulomb_matrix)).sum();
-  double k_energy = 0.0;
+  // Two-electron Coulomb energy: 0.5 * Tr(P * J)
+  // The 0.5 accounts for double counting in the Coulomb interaction
+  double j_energy = 0.5 * (density_matrix.cwiseProduct(coulomb_matrix)).sum();
   
+  // Exact exchange energy (only for hybrid functionals)
+  // For hybrids: E_x^exact = -0.5 * alpha * Tr(P * K)
+  double exact_exchange = 0.0;
   if (is_hybrid) {
-    k_energy = hybrid_coeff * 0.5 * (density_matrix.cwiseProduct(exchange_matrix)).sum();
+    exact_exchange = -0.5 * hybrid_coeff * (density_matrix.cwiseProduct(exchange_matrix)).sum();
   }
   
-  // Kinetic energy component (for output)
+  // Kinetic energy component (for output purposes)
   kinetic_energy = (density_matrix.cwiseProduct(kinetic_matrix)).sum();
   
-  // Total energy: E = E_nuc + Tr(P*H_core) + 0.5*Tr(P*(2J-K)) + E_xc
-  // For closed-shell: Tr(P*H_core) already includes factor of 2 from density
-  // The 0.5 factor accounts for double-counting in two-electron terms
-  total_dft_energy = nuclear_repulsion + one_electron + 0.5 * j_energy - k_energy + xc_energy;
+  // Total DFT energy
+  // E_total = E_nuc + Tr(P*H_core) + 0.5*Tr(P*J) + E_x^exact + E_xc
+  // Note: E_xc already includes the DFT exchange and correlation
+  // For hybrids, E_xc is scaled by (1-alpha) for exchange part
+  total_dft_energy = nuclear_repulsion + one_electron + j_energy + exact_exchange + xc_energy;
+  
+  // Debug output for energy components
+  if (comm->me == 0 && current_iteration <= 2) {
+    utils::logmesg(lmp, fmt::format("\nEnergy Components (iter {}):\n", current_iteration));
+    utils::logmesg(lmp, fmt::format("  Nuclear repulsion: {:.8f} Eh\n", nuclear_repulsion));
+    utils::logmesg(lmp, fmt::format("  One-electron:      {:.8f} Eh\n", one_electron));
+    utils::logmesg(lmp, fmt::format("  Coulomb (J):       {:.8f} Eh\n", j_energy));
+    if (is_hybrid) {
+      utils::logmesg(lmp, fmt::format("  Exact exchange:    {:.8f} Eh\n", exact_exchange));
+    }
+    utils::logmesg(lmp, fmt::format("  XC functional:     {:.8f} Eh\n", xc_energy));
+    utils::logmesg(lmp, fmt::format("  Total:             {:.8f} Eh\n\n", total_dft_energy));
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -292,14 +306,32 @@ void PairDFT::generate_integration_grid()
       double r = r_points[i_r];
       double w_r = r_weights[i_r];
       
+      // Debug first few radial points
+      if (comm->me == 0 && atom_idx == 0 && i_r < 3) {
+        utils::logmesg(lmp, fmt::format("  Radial point {}: r={:.3f} Bohr, weight={:.6f}\n", i_r, r, w_r));
+      }
+      
       for (size_t i_ang = 0; i_ang < angular_points.size(); i_ang++) {
         std::vector<double> point(3);
         point[0] = x[atom_idx][0] * ANGSTROM_TO_BOHR + r * angular_points[i_ang][0];
         point[1] = x[atom_idx][1] * ANGSTROM_TO_BOHR + r * angular_points[i_ang][1];
         point[2] = x[atom_idx][2] * ANGSTROM_TO_BOHR + r * angular_points[i_ang][2];
         
+        // Debug first grid point
+        if (comm->me == 0 && atom_idx == 0 && i_r == 0 && i_ang == 0) {
+          utils::logmesg(lmp, fmt::format("  First grid point for atom 0: ({:.3f}, {:.3f}, {:.3f}) Bohr\n", 
+                                          point[0], point[1], point[2]));
+          utils::logmesg(lmp, fmt::format("    Angular point: ({:.3f}, {:.3f}, {:.3f})\n",
+                                          angular_points[i_ang][0], angular_points[i_ang][1], angular_points[i_ang][2]));
+        }
+        
         grid_points.push_back(point);
-        grid_weights.push_back(w_r * angular_weights[i_ang] * r * r);
+        // The combined weight for spherical integration:
+        // - w_r includes the radial Jacobian dr/dξ
+        // - angular_weights[i_ang] is the angular quadrature weight (normalized to 4π)
+        // - r^2 is the spherical volume element
+        // Combined weight: w_r * r^2 * w_angular
+        grid_weights.push_back(w_r * r * r * angular_weights[i_ang]);
         grid_atom_owners.push_back(atom_idx);
       }
     }
@@ -347,12 +379,14 @@ void PairDFT::generate_lebedev_grid(int n_points,
     points.push_back({0, 0, 1});
     points.push_back({0, 0, -1});
     
+    // Each point gets equal weight, sum should be 4π
     double w = 4.0 * M_PI / 6.0;
     for (int i = 0; i < 6; i++) {
       weights.push_back(w);
     }
   } else {
     // Use spherical Fibonacci grid as approximation
+    // This is not ideal but works as a placeholder
     double phi = (1.0 + sqrt(5.0)) / 2.0;  // Golden ratio
     
     for (int i = 0; i < actual_points; i++) {
@@ -365,8 +399,24 @@ void PairDFT::generate_lebedev_grid(int n_points,
       point[1] = radius * sin(theta);
       point[2] = y;
       
+      // Ensure point is on unit sphere (normalize to be safe)
+      double norm = sqrt(point[0]*point[0] + point[1]*point[1] + point[2]*point[2]);
+      if (norm > 1e-10) {
+        point[0] /= norm;
+        point[1] /= norm;
+        point[2] /= norm;
+      }
+      
       points.push_back(point);
-      weights.push_back(4.0 * M_PI / actual_points);
+      weights.push_back(1.0);  // Temporary unit weight
+    }
+    
+    // Normalize weights to sum to 4π
+    double sum = 0.0;
+    for (double w : weights) sum += w;
+    if (sum > 0) {
+      double scale = 4.0 * M_PI / sum;
+      for (double& w : weights) w *= scale;
     }
   }
 }
@@ -382,20 +432,43 @@ void PairDFT::generate_radial_grid(int n_points, double Z,
   r.resize(n_points);
   w.resize(n_points);
   
-  // Bragg radius for scaling
-  double R_bragg = 1.0;
-  if (Z > 0) R_bragg = 0.5 * (3.0 - 0.01 * Z);
+  // Use Mura-Knowles radial grid with atomic scaling
+  // Scale factor based on atomic number
+  double alpha = 0.5;  // Better scaling for hydrogen
+  if (Z > 1) {
+    // For heavier atoms, adjust scaling
+    // Roughly scales as 1/sqrt(Z)
+    alpha = 2.0 / sqrt(Z);
+  }
   
   for (int i = 0; i < n_points; i++) {
-    // Chebyshev nodes
-    double xi = cos(M_PI * (i + 0.5) / n_points);
+    // Map index to xi in [-1, 1]
+    double xi = -1.0 + 2.0 * (i + 0.5) / n_points;
     
-    // Becke transformation
-    double x = (1.0 + xi) / (1.0 - xi);
-    r[i] = R_bragg * x;
+    // Mura-Knowles transformation: r = alpha * (1 + xi) / (1 - xi)
+    // This maps [-1, 1] to [0, infinity)
+    // But we need to be careful near xi = 1 to avoid overflow
     
-    // Weight includes Jacobian
-    w[i] = (M_PI / n_points) * 2.0 * R_bragg / ((1.0 - xi) * (1.0 - xi));
+    // Stop before xi gets too close to 1 to avoid numerical issues
+    if (xi > 0.95) {  // Stop earlier for better numerical stability
+      r[i] = 8.0;  // Reduced cutoff radius in bohr (was 15.0)
+      w[i] = 0.0;   // Zero weight for cutoff points
+    } else {
+      r[i] = alpha * (1.0 + xi) / (1.0 - xi);
+      
+      // Limit maximum radius to avoid numerical issues
+      if (r[i] > 8.0 || r[i] < 0.0) {  // Reduced from 15.0 to 8.0 Bohr
+        r[i] = 8.0;
+        w[i] = 0.0;  // Zero weight for points beyond cutoff
+      } else {
+        // Weight includes Jacobian of transformation
+        // dr/dxi = 2*alpha / (1-xi)^2
+        // The radial weight is just the integration measure times Jacobian
+        // We'll add the r^2 spherical factor when combining with angular weights
+        double jacobian = 2.0 * alpha / ((1.0 - xi) * (1.0 - xi));
+        w[i] = (2.0 / n_points) * jacobian;
+      }
+    }
   }
 }
 
@@ -463,6 +536,18 @@ void PairDFT::compute_becke_weights(const std::vector<std::vector<double>> &atom
       becke_weights[i_point] = 0.0;
     }
   }
+  
+  // Debug: Check Becke weight statistics
+  if (comm->me == 0) {
+    double sum_becke = 0.0;
+    double max_becke = 0.0;
+    for (double w : becke_weights) {
+      sum_becke += w;
+      if (w > max_becke) max_becke = w;
+    }
+    utils::logmesg(lmp, fmt::format("  Becke weights: sum={:.6f}, max={:.6f}, n_points={}\n",
+                                    sum_becke, max_becke, n_points));
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -494,6 +579,13 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
   std::vector<double> sigma(n_points, 0.0);  // |grad rho|^2
   std::vector<double> lapl(n_points, 0.0);   // Laplacian
   std::vector<double> tau(n_points, 0.0);     // Kinetic energy density
+  
+  // Debug density matrix
+  if (comm->me == 0 && current_iteration == 1) {
+    double trace = density_matrix.trace();
+    double sum = density_matrix.sum();
+    utils::logmesg(lmp, fmt::format("  Density matrix: trace={:.6f}, sum={:.6f}\n", trace, sum));
+  }
   
   for (int i_point = 0; i_point < n_points; i_point++) {
     // Density
@@ -538,8 +630,42 @@ void PairDFT::integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matr
   evaluate_xc_functional(rho, sigma, lapl, tau, exc, vrho, vsigma, vlapl, vtau);
   
   // Integrate XC energy
+  // LibXC returns exc as energy density per particle (Eh per electron)
+  // E_xc = ∫ exc(rho) * rho dV
+  double total_electrons = 0.0;
+  double max_exc = 0.0;
+  double max_rho = 0.0;
+  double sum_weights = 0.0;
+  double sum_grid_weights = 0.0;
+  double sum_becke_weights = 0.0;
+  
   for (int i_point = 0; i_point < n_points; i_point++) {
-    exc_energy += exc[i_point] * rho[i_point] * grid_weights[i_point] * becke_weights[i_point];
+    sum_grid_weights += grid_weights[i_point];
+    sum_becke_weights += becke_weights[i_point];
+    
+    // Only integrate where density is significant
+    if (rho[i_point] > 1e-15) {
+      double w = grid_weights[i_point] * becke_weights[i_point];
+      exc_energy += exc[i_point] * rho[i_point] * w;
+      total_electrons += rho[i_point] * w;
+      sum_weights += w;
+      
+      if (std::abs(exc[i_point]) > max_exc) max_exc = std::abs(exc[i_point]);
+      if (rho[i_point] > max_rho) max_rho = rho[i_point];
+    }
+  }
+  
+  // Debug output
+  if (comm->me == 0 && current_iteration == 1) {
+    utils::logmesg(lmp, fmt::format("\nGrid Integration Debug:\n"));
+    utils::logmesg(lmp, fmt::format("  Grid points: {}\n", n_points));
+    utils::logmesg(lmp, fmt::format("  Integrated electrons: {:.6f} (expected: {})\n", total_electrons, n_electrons));
+    utils::logmesg(lmp, fmt::format("  Max |exc|: {:.6f} Eh\n", max_exc));
+    utils::logmesg(lmp, fmt::format("  Max rho: {:.6f}\n", max_rho));
+    utils::logmesg(lmp, fmt::format("  Sum of grid weights: {:.6f}\n", sum_grid_weights));
+    utils::logmesg(lmp, fmt::format("  Sum of Becke weights: {:.6f}\n", sum_becke_weights));
+    utils::logmesg(lmp, fmt::format("  Sum of combined weights: {:.6f}\n", sum_weights));
+    utils::logmesg(lmp, fmt::format("  XC energy (raw): {:.6f} Eh\n\n", exc_energy));
   }
   
   // Build XC potential matrix
