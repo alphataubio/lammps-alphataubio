@@ -295,9 +295,20 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
   
   bool need_gradients = !basis_gradients.empty();
   if (need_gradients) {
-    basis_gradients.resize(n_points, 
-                          std::vector<std::vector<double>>(n_basis_functions, 
-                                                          std::vector<double>(3)));
+    // Ensure proper sizing
+    if (basis_gradients.size() != n_points) {
+      basis_gradients.resize(n_points);
+    }
+    for (int i = 0; i < n_points; i++) {
+      if (basis_gradients[i].size() != n_basis_functions) {
+        basis_gradients[i].resize(n_basis_functions, std::vector<double>(3, 0.0));
+      }
+    }
+    
+    if (comm->me == 0) {
+      utils::logmesg(lmp, fmt::format("Gradients initialized: {} points, {} basis functions\n", 
+                                      n_points, n_basis_functions));
+    }
   }
   
   // Get current atom positions from LAMMPS atom structure
@@ -309,20 +320,31 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
     int bf_idx = 0;
     
     for (int shell = 0; shell < n_shells; shell++) {
-      int l = angular_momentum[shell];
-      
-      // Bounds checking for exponents and coefficients
-      if (shell >= exponents.size() || shell >= coefficients.size()) {
+      // Bounds checking
+      if (shell >= angular_momentum.size() || shell >= exponents.size() || 
+          shell >= coefficients.size() || shell >= shell_to_atom.size()) {
         if (comm->me == 0) {
-          error->warning(FLERR, fmt::format("Shell {} out of bounds (exp size={}, coeff size={})", 
-                                           shell, exponents.size(), coefficients.size()));
+          error->warning(FLERR, fmt::format("Shell {} out of bounds", shell));
         }
         continue;
       }
       
-      auto shell_exponents = exponents[shell];
-      auto shell_coefficients = coefficients[shell];
+      int l = angular_momentum[shell];
       int atom_id = shell_to_atom[shell];
+      
+      // Make local copies of the vectors to ensure they're valid
+      std::vector<double> shell_exponents;
+      std::vector<double> shell_coefficients;
+      
+      try {
+        shell_exponents = exponents.at(shell);
+        shell_coefficients = coefficients.at(shell);
+      } catch (const std::exception& e) {
+        if (comm->me == 0) {
+          error->warning(FLERR, fmt::format("Failed to get shell {} data: {}", shell, e.what()));
+        }
+        continue;
+      }
       
       // Skip if exponents or coefficients are empty
       if (shell_exponents.empty() || shell_coefficients.empty()) {
@@ -336,12 +358,24 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
         continue;
       }
       
+      // Debug: print first exponent and coefficient
+      if (comm->me == 0 && i_point == 0) {
+        utils::logmesg(lmp, fmt::format("Shell {}: first exp={}, first coeff={}\n",
+                                        shell, shell_exponents[0], shell_coefficients[0]));
+      }
+      
       // Get atom position directly from LAMMPS
       std::vector<double> atom_pos(3, 0.0);
       if (atom_id >= 0 && atom_id < nlocal) {
         atom_pos[0] = x[atom_id][0] * ANGSTROM_TO_BOHR;
         atom_pos[1] = x[atom_id][1] * ANGSTROM_TO_BOHR;
         atom_pos[2] = x[atom_id][2] * ANGSTROM_TO_BOHR;
+        
+        if (i_point == 0 && comm->me == 0) {
+          utils::logmesg(lmp, fmt::format("  Atom {}: pos=({}, {}, {}) Angstrom = ({}, {}, {}) Bohr\n",
+                                          atom_id, x[atom_id][0], x[atom_id][1], x[atom_id][2],
+                                          atom_pos[0], atom_pos[1], atom_pos[2]));
+        }
       }
       
       // Calculate distance vector from atom to grid point
@@ -356,17 +390,64 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
       
       // Evaluate each Cartesian Gaussian in the shell
       for (size_t func = 0; func < cart_indices.size(); func++) {
-        int nx = cart_indices[func][0];
-        int ny = cart_indices[func][1];
-        int nz = cart_indices[func][2];
+        if (i_point == 0 && comm->me == 0) {
+          utils::logmesg(lmp, fmt::format("  Shell {} func {}/{}: cart_indices.size()={}\n", 
+                                          shell, func, cart_indices.size(), cart_indices.size()));
+          if (func < cart_indices.size() && !cart_indices[func].empty()) {
+            utils::logmesg(lmp, fmt::format("    cart_indices[{}] size={}\n", func, cart_indices[func].size()));
+          }
+        }
+        
+        // Safety check
+        if (func >= cart_indices.size() || cart_indices[func].size() < 3) {
+          if (comm->me == 0) {
+            error->all(FLERR, fmt::format("Shell {} func {} has invalid cart_indices", shell, func));
+          }
+          continue;
+        }
+        
+        int nx, ny, nz;
+        try {
+          nx = cart_indices.at(func).at(0);
+          ny = cart_indices.at(func).at(1);
+          nz = cart_indices.at(func).at(2);
+        } catch (const std::exception& e) {
+          if (comm->me == 0) {
+            error->all(FLERR, fmt::format("Shell {} func {} cart_indices access failed: {}", shell, func, e.what()));
+          }
+          continue;
+        }
         
         double value = 0.0;
         std::vector<double> gradient = {0.0, 0.0, 0.0};
         
         // Contract over primitives
-        for (size_t prim = 0; prim < shell_exponents.size(); prim++) {
+        size_t n_primitives = shell_exponents.size();
+        if (n_primitives != shell_coefficients.size()) {
+          if (comm->me == 0) {
+            error->warning(FLERR, fmt::format("Shell {} has mismatched exp/coeff sizes: {} vs {}",
+                                             shell, n_primitives, shell_coefficients.size()));
+          }
+          n_primitives = std::min(n_primitives, shell_coefficients.size());
+        }
+        
+        for (size_t prim = 0; prim < n_primitives; prim++) {
+          // Extra safety check
+          if (prim >= shell_exponents.size() || prim >= shell_coefficients.size()) {
+            if (comm->me == 0) {
+              error->all(FLERR, fmt::format("Shell {} prim {} exceeds size (exp_size={}, coeff_size={})",
+                                           shell, prim, shell_exponents.size(), shell_coefficients.size()));
+            }
+            break;
+          }
+          
           double alpha = shell_exponents[prim];
           double coeff = shell_coefficients[prim];
+          
+          // Debug output for first point
+          if (i_point == 0 && comm->me == 0) {
+            utils::logmesg(lmp, fmt::format("  Shell {} prim {}: alpha={}, coeff={}\n", shell, prim, alpha, coeff));
+          }
           
           // Gaussian exponential part
           double gauss_exp = exp(-alpha * r2);
@@ -380,6 +461,12 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
           
           // Compute gradients if needed
           if (need_gradients) {
+            // Debug
+            if (i_point == 0 && comm->me == 0 && shell == 0 && prim == 0) {
+              utils::logmesg(lmp, fmt::format("    Computing gradients: nx={}, ny={}, nz={}, dx={}, dy={}, dz={}\n",
+                                              nx, ny, nz, dx, dy, dz));
+            }
+            
             // Gradient of N * exp(-alpha*r^2) * x^nx * y^ny * z^nz
             // d/dx = N * exp(-alpha*r^2) * y^ny * z^nz * (nx * x^(nx-1) - 2*alpha*x * x^nx)
             
@@ -418,9 +505,41 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
           }
         }
         
+        // Store results with bounds checking
+        if (bf_idx >= n_basis_functions) {
+          if (comm->me == 0) {
+            error->all(FLERR, fmt::format("bf_idx {} exceeds n_basis_functions {} at shell {}", 
+                                         bf_idx, n_basis_functions, shell));
+          }
+          break;
+        }
+        
         basis_values[i_point][bf_idx] = value;
         
         if (need_gradients) {
+          // Extra safety check for gradients
+          if (i_point >= basis_gradients.size()) {
+            if (comm->me == 0) {
+              error->all(FLERR, fmt::format("i_point {} exceeds basis_gradients.size() {}", 
+                                           i_point, basis_gradients.size()));
+            }
+            break;
+          }
+          if (bf_idx >= basis_gradients[i_point].size()) {
+            if (comm->me == 0) {
+              error->all(FLERR, fmt::format("bf_idx {} exceeds basis_gradients[{}].size() {}", 
+                                           bf_idx, i_point, basis_gradients[i_point].size()));
+            }
+            break;
+          }
+          if (basis_gradients[i_point][bf_idx].size() < 3) {
+            if (comm->me == 0) {
+              error->all(FLERR, fmt::format("basis_gradients[{}][{}] has size {} < 3", 
+                                           i_point, bf_idx, basis_gradients[i_point][bf_idx].size()));
+            }
+            break;
+          }
+          
           basis_gradients[i_point][bf_idx][0] = gradient[0];
           basis_gradients[i_point][bf_idx][1] = gradient[1];
           basis_gradients[i_point][bf_idx][2] = gradient[2];
