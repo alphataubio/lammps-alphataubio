@@ -48,6 +48,18 @@ void PairDFT::initialize_basis_set()
   // Compute one-electron integrals
   compute_one_electron_integrals();
   
+  // Check overlap matrix for debugging
+  if (comm->me == 0) {
+    double trace = overlap_matrix.trace();
+    double expected_trace = n_basis_functions;
+    
+    if (std::abs(trace - expected_trace) > 0.1 * expected_trace) {
+      utils::logmesg(lmp, fmt::format("NOTE: Overlap matrix trace = {:.2f} (expected ~{})\n", 
+                                      trace, n_basis_functions));
+      utils::logmesg(lmp, "      This may indicate different normalization conventions\n");
+    }
+  }
+  
   // Initialize density guess
   initialize_density_guess();
 }
@@ -159,8 +171,8 @@ void PairDFT::load_basis_from_json(const std::string &filename)
     }
   }
   
-  // Normalize the contracted basis functions
-  normalize_basis_functions();
+  // BSE basis sets are already normalized, don't modify them
+  // The overlap matrix trace issue might be from libint2 expecting different normalization
   
   if (comm->me == 0) {
     utils::logmesg(lmp, fmt::format("Loaded basis set with {} shells and {} basis functions\n", 
@@ -173,58 +185,13 @@ void PairDFT::load_basis_from_json(const std::string &filename)
 }
 
 /* ----------------------------------------------------------------------
-   Normalize basis functions
+   Normalize basis functions - NOT USED
+   BSE basis sets are already properly normalized
 ------------------------------------------------------------------------- */
 
 void PairDFT::normalize_basis_functions()
 {
-  normalized_coefficients.clear();
-  
-  for (int shell = 0; shell < n_shells; shell++) {
-    int l = angular_momentum[shell];
-    std::vector<double> norm_coeffs;
-    
-    // First, normalize each primitive
-    std::vector<double> prim_norms;
-    for (size_t i = 0; i < exponents[shell].size(); i++) {
-      double alpha = exponents[shell][i];
-      double norm = compute_normalization(l, alpha);
-      prim_norms.push_back(norm);
-    }
-    
-    // Compute overlap of the contracted function with itself
-    double S_contracted = 0.0;
-    for (size_t i = 0; i < exponents[shell].size(); i++) {
-      for (size_t j = 0; j < exponents[shell].size(); j++) {
-        double alpha_i = exponents[shell][i];
-        double alpha_j = exponents[shell][j];
-        double coeff_i = coefficients[shell][i] * prim_norms[i];
-        double coeff_j = coefficients[shell][j] * prim_norms[j];
-        
-        // Overlap between two primitives with same center
-        double overlap = pow(M_PI / (alpha_i + alpha_j), 1.5);
-        if (l > 0) {
-          // Add angular momentum factor
-          double factor = 1.0;
-          for (int k = 0; k < l; k++) {
-            factor *= (2*k + 1) / (2.0 * (alpha_i + alpha_j));
-          }
-          overlap *= factor;
-        }
-        
-        S_contracted += coeff_i * coeff_j * overlap;
-      }
-    }
-    
-    // Normalize the contracted function
-    double contraction_norm = 1.0 / sqrt(S_contracted);
-    
-    for (size_t i = 0; i < exponents[shell].size(); i++) {
-      norm_coeffs.push_back(coefficients[shell][i] * prim_norms[i] * contraction_norm);
-    }
-    
-    normalized_coefficients.push_back(norm_coeffs);
-  }
+  // Not implemented - BSE basis sets don't need renormalization
 }
 
 /* ----------------------------------------------------------------------
@@ -284,17 +251,11 @@ std::vector<double> PairDFT::get_exponents(int shell) const
 
 std::vector<double> PairDFT::get_coefficients(int shell) const
 {
-  if (shell < 0 || shell >= n_shells) 
+  if (shell < 0 || shell >= n_shells || shell >= coefficients.size()) 
     return std::vector<double>();
   
-  // Return normalized coefficients if available, otherwise raw coefficients
-  if (!normalized_coefficients.empty() && shell < normalized_coefficients.size()) {
-    return normalized_coefficients[shell];
-  } else if (shell < coefficients.size()) {
-    return coefficients[shell];
-  }
-  
-  return std::vector<double>();
+  // Always return raw coefficients since BSE provides normalized basis
+  return coefficients[shell];
 }
 
 /* ----------------------------------------------------------------------
@@ -408,13 +369,7 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
       double dz = points[i_point][2] - atom_pos[2];
       double r2 = dx*dx + dy*dy + dz*dz;
       
-      // Debug extreme displacements
-      if (i_point == 0 && shell == 0 && comm->me == 0) {
-        utils::logmesg(lmp, fmt::format("    Grid point 0: ({:.3f}, {:.3f}, {:.3f}) Bohr\n", 
-                                        points[i_point][0], points[i_point][1], points[i_point][2]));
-        utils::logmesg(lmp, fmt::format("    Displacement: dx={:.3f}, dy={:.3f}, dz={:.3f} Bohr, r={:.3f} Bohr\n", 
-                                        dx, dy, dz, sqrt(r2)));
-      }
+      
       
       // Skip if grid point is too far from atom (basis function will be negligible)
       // Cutoff at 10 Bohr is reasonable for most basis sets

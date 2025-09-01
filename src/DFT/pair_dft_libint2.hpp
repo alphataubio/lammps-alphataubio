@@ -56,7 +56,39 @@ void PairDFT::initialize_libint()
     }
     
     // Convert coefficients to svector
-    for (auto coeff : shell_coefficients) contr.coeff.push_back(coeff);
+    // Libint2 uses normalized primitives by default
+    // Check if BSE coefficients need renormalization
+    std::vector<double> normalized_coeff;
+    
+    // First compute the self-overlap of the contraction
+    double S_contr = 0.0;
+    for (size_t i = 0; i < shell_coefficients.size(); i++) {
+      for (size_t j = 0; j < shell_coefficients.size(); j++) {
+        double alpha_i = shell_exponents[i];
+        double alpha_j = shell_exponents[j];
+        double ci = shell_coefficients[i];
+        double cj = shell_coefficients[j];
+        
+        // Overlap integral for primitives with same center
+        // S_ij = (pi/(alpha_i + alpha_j))^(3/2)
+        double S_ij = pow(M_PI / (alpha_i + alpha_j), 1.5);
+        
+        // Add angular momentum factor for l > 0
+        double ang_factor = 1.0;
+        for (int k = 0; k < l; k++) {
+          ang_factor *= (2*k + 1) / (2.0 * (alpha_i + alpha_j));
+        }
+        
+        S_contr += ci * cj * S_ij * ang_factor;
+      }
+    }
+    
+    // Normalize the contraction if needed
+    double norm_factor = 1.0 / sqrt(S_contr);
+    
+    for (auto coeff : shell_coefficients) {
+      contr.coeff.push_back(coeff * norm_factor);
+    }
     
     // Create svector of contractions
     libint2::svector<libint2::Shell::Contraction> contr_svec;

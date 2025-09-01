@@ -28,6 +28,7 @@ void PairDFT::parse_functional_name(const char *name)
   xc_functional_xc = -1;
   
   use_combined_xc = false;
+  is_lda = false;
   is_hybrid = false;
   is_meta_gga = false;
   is_range_separated = false;
@@ -49,6 +50,7 @@ void PairDFT::parse_functional_name(const char *name)
     use_combined_xc = false;
     xc_functional_x = XC_LDA_X;     // ID 1
     xc_functional_c = XC_LDA_C_PW;  // ID 12
+    is_lda = true;
   }
   else if (func_str == "B3LYP") {
     // B3LYP is a combined hybrid functional
@@ -145,6 +147,7 @@ void PairDFT::initialize_libxc_functional()
     const xc_func_info_type *info = xc_func_get_info(xc_func_xc);
     int family = xc_func_info_get_family(info);
     
+    if (family == XC_FAMILY_LDA) is_lda = true;
     if (family == XC_FAMILY_HYB_GGA || family == XC_FAMILY_HYB_MGGA) {
       is_hybrid = true;
       hybrid_coeff = xc_hyb_exx_coef(xc_func_xc);
@@ -170,6 +173,7 @@ void PairDFT::initialize_libxc_functional()
       const xc_func_info_type *info = xc_func_get_info(xc_func_x);
       int family = xc_func_info_get_family(info);
       
+      if (family == XC_FAMILY_LDA) is_lda = true;
       if (family == XC_FAMILY_HYB_GGA || family == XC_FAMILY_HYB_MGGA) {
         is_hybrid = true;
         hybrid_coeff = xc_hyb_exx_coef(xc_func_x);
@@ -185,6 +189,7 @@ void PairDFT::initialize_libxc_functional()
       
       const xc_func_info_type *info = xc_func_get_info(xc_func_c);
       int family = xc_func_info_get_family(info);
+      if (family == XC_FAMILY_LDA) is_lda = true;
       if (family == XC_FAMILY_MGGA) is_meta_gga = true;
     }
     

@@ -58,6 +58,7 @@ class PairDFT : public Pair {
   int xc_functional_xc;
   
   bool use_combined_xc;
+  bool is_lda;
   bool is_hybrid;
   bool is_meta_gga;
   bool is_range_separated;
@@ -175,15 +176,29 @@ class PairDFT : public Pair {
   double compute_nuclear_repulsion_energy();
   void initialize_density_guess();
   
-  // Grid integration
-  void generate_integration_grid();
-  void generate_lebedev_grid(int n_points, 
-                             std::vector<std::vector<double>> &points,
-                             std::vector<double> &weights);
-  void generate_radial_grid(int n_points, double Z,
-                           std::vector<double> &r, std::vector<double> &w);
-  void compute_becke_weights(const std::vector<std::vector<double>> &atoms);
-  void integrate_xc_on_grid(double &exc_energy, Eigen::MatrixXd &vxc_matrix);
+  // Grid integration methods
+  void generate_molecular_grid();
+  void generate_mura_knowles_radial(int n_points, double Z,
+                                    std::vector<double> &r_points,
+                                    std::vector<double> &r_weights);
+  void generate_lebedev_angular(int n_target,
+                                std::vector<std::vector<double>> &points,
+                                std::vector<double> &weights);
+  void generate_lebedev_6(std::vector<std::vector<double>> &points,
+                          std::vector<double> &weights);
+  void generate_lebedev_14(std::vector<std::vector<double>> &points,
+                           std::vector<double> &weights);
+  void generate_lebedev_38(std::vector<std::vector<double>> &points,
+                           std::vector<double> &weights);
+  void generate_lebedev_110(std::vector<std::vector<double>> &points,
+                            std::vector<double> &weights);
+  void generate_lebedev_302(std::vector<std::vector<double>> &points,
+                            std::vector<double> &weights);
+  void generate_uniform_angular(int n_points,
+                                std::vector<std::vector<double>> &points,
+                                std::vector<double> &weights);
+  void apply_becke_partitioning(const std::vector<std::vector<double>> &atom_positions);
+  void integrate_xc_potential(double &exc_energy, Eigen::MatrixXd &vxc_matrix);
   
   // Force methods
   void compute_hellmann_feynman_forces();
