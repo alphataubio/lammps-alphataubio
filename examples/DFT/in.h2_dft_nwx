@@ -1,0 +1,48 @@
+# LAMMPS input script for H2 molecule with DFT
+# Using NWChemEx SCF and GauXC
+
+units metal
+atom_style atomic
+atom_modify map array
+
+# Create simulation box
+lattice sc 10.0
+region box block -1 1 -1 1 -1 1
+create_box 1 box
+
+# Create H2 molecule (bond length ~0.74 Angstrom)
+create_atoms 1 single -0.37 0.0 0.0
+create_atoms 1 single  0.37 0.0 0.0
+
+mass 1 1.00794  # Hydrogen
+
+# DFT settings using NWChemEx
+# Syntax: pair_style dft <functional> <basis_file> [options]
+pair_style dft PBE /Users/mitch/github/lammps-alphataubio/examples/DFT/def2-svp.H.json grid Fine maxiter 100 etol 1e-8 dtol 1e-6
+
+# Pair coefficients (cutoff not really used in DFT but required)
+pair_coeff * * 20.0
+
+# Set initial velocities to zero
+velocity all set 0.0 0.0 0.0
+
+# Output settings
+thermo_style custom step temp pe ke etotal
+thermo 1
+
+# Run single point energy calculation
+run 0
+
+# Extract and print DFT data
+variable dft_e equal extract(dft,dft_energy)
+variable xc_e equal extract(dft,xc_energy)
+variable n_elec equal extract(dft,n_electrons)
+variable n_basis equal extract(dft,n_basis)
+
+print "========================================="
+print "DFT Calculation Results (via NWChemEx):"
+print "Total DFT Energy: ${dft_e} eV"
+print "XC Energy: ${xc_e} eV"
+print "Number of electrons: ${n_elec}"
+print "Number of basis functions: ${n_basis}"
+print "========================================="
