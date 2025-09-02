@@ -24,12 +24,19 @@ PairStyle(dft,PairDFT);
 #include <vector>
 #include <string>
 #include <memory>
+#include <map>
+#include <tuple>
 #include <Eigen/Dense>
 #include <xc.h>
 #include <libint2.hpp>
 #include "fmt/format.h"
 
 namespace LAMMPS_NS {
+
+// Unit conversion constants
+const double ANGSTROM_TO_BOHR = 1.8897259886;
+const double BOHR_TO_ANGSTROM = 0.52917721067;
+const double HARTREE_TO_EV = 27.211386245981;
 
 class PairDFT : public Pair {
  public:
@@ -113,6 +120,11 @@ class PairDFT : public Pair {
   std::vector<std::vector<double>> coefficients;
   std::vector<std::vector<double>> normalized_coefficients;
   
+  // Map from atomic number to basis data
+  std::map<int, std::tuple<std::vector<int>, 
+                           std::vector<std::vector<double>>,
+                           std::vector<std::vector<double>>>> element_basis_data;
+  
   // LibInt2 data
   std::unique_ptr<libint2::BasisSet> libint_basis;
   std::vector<std::unique_ptr<libint2::Engine>> engines;
@@ -178,26 +190,12 @@ class PairDFT : public Pair {
   
   // Grid integration methods
   void generate_molecular_grid();
-  void generate_mura_knowles_radial(int n_points, double Z,
-                                    std::vector<double> &r_points,
-                                    std::vector<double> &r_weights);
-  void generate_lebedev_angular(int n_target,
-                                std::vector<std::vector<double>> &points,
-                                std::vector<double> &weights);
-  void generate_lebedev_6(std::vector<std::vector<double>> &points,
-                          std::vector<double> &weights);
-  void generate_lebedev_14(std::vector<std::vector<double>> &points,
-                           std::vector<double> &weights);
-  void generate_lebedev_38(std::vector<std::vector<double>> &points,
-                           std::vector<double> &weights);
-  void generate_lebedev_110(std::vector<std::vector<double>> &points,
-                            std::vector<double> &weights);
+  void generate_mura_knowles_quadrature(int n_points, double Z,
+                                        std::vector<double> &r_points,
+                                        std::vector<double> &r_weights);
   void generate_lebedev_302(std::vector<std::vector<double>> &points,
-                            std::vector<double> &weights);
-  void generate_uniform_angular(int n_points,
-                                std::vector<std::vector<double>> &points,
-                                std::vector<double> &weights);
-  void apply_becke_partitioning(const std::vector<std::vector<double>> &atom_positions);
+                           std::vector<double> &weights);
+  void apply_molecular_partitioning(const std::vector<std::vector<double>> &atom_positions);
   void integrate_xc_potential(double &exc_energy, Eigen::MatrixXd &vxc_matrix);
   
   // Force methods
