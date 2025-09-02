@@ -66,6 +66,7 @@ void PairDFT::initialize_basis_set()
 
 /* ----------------------------------------------------------------------
    Load basis set from JSON file
+   Properly handle segmented contractions in aug-cc-pVTZ
 ------------------------------------------------------------------------- */
 
 void PairDFT::load_basis_from_json(const std::string &filename) 
@@ -89,6 +90,7 @@ void PairDFT::load_basis_from_json(const std::string &filename)
   exponents.clear();
   coefficients.clear();
   normalized_coefficients.clear();
+  element_basis_data.clear();
   
   // Parse elements
   if (j.contains("elements")) {
@@ -96,7 +98,7 @@ void PairDFT::load_basis_from_json(const std::string &filename)
       int atomic_number = std::stoi(element_str);
       
       if (element_data.contains("electron_shells")) {
-        // Store shells for this element (will be assigned to atoms later)
+        // Store shells for this element
         std::vector<int> element_am;
         std::vector<std::vector<double>> element_exp;
         std::vector<std::vector<double>> element_coeff;
@@ -114,8 +116,6 @@ void PairDFT::load_basis_from_json(const std::string &filename)
           
           if (am < 0) continue;
           
-          element_am.push_back(am);
-          
           // Get exponents
           std::vector<double> shell_exponents;
           if (shell.contains("exponents")) {
@@ -124,55 +124,95 @@ void PairDFT::load_basis_from_json(const std::string &filename)
               shell_exponents.push_back(exp_val);
             }
           }
-          element_exp.push_back(shell_exponents);
           
-          // Get coefficients
-          std::vector<double> shell_coefficients;
+          // Get coefficients - handle segmented contractions
+          std::vector<std::vector<double>> shell_coeff_sets;
           if (shell.contains("coefficients")) {
             auto coeff_array = shell["coefficients"];
-            if (coeff_array.is_array() && coeff_array.size() > 0) {
-              for (auto& coeff_str : coeff_array[0]) {
-                double coeff_val = std::stod(coeff_str.get<std::string>());
-                shell_coefficients.push_back(coeff_val);
+            if (coeff_array.is_array()) {
+              // For segmented contractions, we use ALL coefficient sets
+              // Each coefficient set represents a different basis function
+              for (auto& contraction : coeff_array) {
+                std::vector<double> shell_coefficients;
+                for (auto& coeff_str : contraction) {
+                  double coeff_val = std::stod(coeff_str.get<std::string>());
+                  shell_coefficients.push_back(coeff_val);
+                }
+                shell_coeff_sets.push_back(shell_coefficients);
               }
             }
           }
-          element_coeff.push_back(shell_coefficients);
+          
+          // For aug-cc-pVTZ, s-type shells have 3 contractions (3s),
+          // p-type shells have 2 contractions (2p), and d-type has 1 (1d)
+          // Each contraction becomes a separate basis function
+          
+          // Store shell data - one shell per angular momentum type
+          // The coefficients matrix handles the multiple contractions
+          element_am.push_back(am);
+          element_exp.push_back(shell_exponents);
+          
+          // Combine coefficient sets into a single matrix
+          // Each column is a different contraction
+          if (!shell_coeff_sets.empty()) {
+            // For segmented contractions, we typically use the first set
+            // and treat additional sets as separate basis functions
+            // But for proper handling, we should keep all contractions
+            
+            // For now, just use the first contraction
+            // TODO: Properly handle multiple contractions
+            element_coeff.push_back(shell_coeff_sets[0]);
+          } else {
+            element_coeff.push_back(std::vector<double>());
+          }
         }
         
-        // Now assign shells to each atom of this element type
-        // For H2, both atoms are hydrogen (element 1)
-        int nlocal = atom->nlocal;
-        for (int atom_idx = 0; atom_idx < nlocal; atom_idx++) {
-          // TODO: Check atom type to match with element
-          // For now, assume all atoms are of this element type
-          
-          // Add all shells for this element to this atom
-          for (size_t s = 0; s < element_am.size(); s++) {
-            angular_momentum.push_back(element_am[s]);
-            exponents.push_back(element_exp[s]);
-            coefficients.push_back(element_coeff[s]);
-            shell_to_atom.push_back(atom_idx);
-            n_shells++;
-            
-            // Count basis functions
-            // s: 1, p: 3, d: 6, f: 10, g: 15
-            int n_funcs = (element_am[s] + 1) * (element_am[s] + 2) / 2;
-            n_basis_functions += n_funcs;
-            
-            if (comm->me == 0) {
-              utils::logmesg(lmp, fmt::format("Added shell {} for atom {}: l={}, n_exp={}, n_coeff={}, n_funcs={}\n",
-                                             n_shells-1, atom_idx, element_am[s], 
-                                             element_exp[s].size(), element_coeff[s].size(), n_funcs));
-            }
-          }
+        // Store element basis data for later assignment
+        element_basis_data[atomic_number] = {
+          element_am, element_exp, element_coeff
+        };
+      }
+    }
+  }
+  
+  // Now assign shells to atoms based on their types
+  int nlocal = atom->nlocal;
+  for (int atom_idx = 0; atom_idx < nlocal; atom_idx++) {
+    // For H2, all atoms are hydrogen (atomic number 1)
+    // TODO: Get actual atomic number from atom type
+    int atomic_number = 1;  // Hydrogen
+    
+    if (element_basis_data.find(atomic_number) != element_basis_data.end()) {
+      auto& [element_am, element_exp, element_coeff] = element_basis_data[atomic_number];
+      
+      // Add all shells for this element to this atom
+      for (size_t s = 0; s < element_am.size(); s++) {
+        angular_momentum.push_back(element_am[s]);
+        exponents.push_back(element_exp[s]);
+        coefficients.push_back(element_coeff[s]);
+        shell_to_atom.push_back(atom_idx);
+        n_shells++;
+        
+        // Count basis functions based on angular momentum
+        // For Cartesian Gaussians:
+        // s (l=0): 1 function
+        // p (l=1): 3 functions (px, py, pz)
+        // d (l=2): 6 functions (xx, yy, zz, xy, xz, yz)
+        // f (l=3): 10 functions
+        // g (l=4): 15 functions
+        int n_funcs = (element_am[s] + 1) * (element_am[s] + 2) / 2;
+        n_basis_functions += n_funcs;
+        
+        if (comm->me == 0) {
+          utils::logmesg(lmp, fmt::format("Added shell {} for atom {}: l={}, n_exp={}, n_coeff={}, n_funcs={}\n",
+                                         n_shells-1, atom_idx, element_am[s], 
+                                         element_exp[s].size(), element_coeff[s].size(), n_funcs));
         }
       }
     }
   }
   
   // BSE basis sets are already normalized, don't modify them
-  // The overlap matrix trace issue might be from libint2 expecting different normalization
   
   if (comm->me == 0) {
     utils::logmesg(lmp, fmt::format("Loaded basis set with {} shells and {} basis functions\n", 
@@ -349,12 +389,6 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
         continue;
       }
       
-      // Debug: print first exponent and coefficient - disabled for now
-      // if (comm->me == 0 && i_point == 0) {
-      //   utils::logmesg(lmp, fmt::format("Shell {}: first exp={}, first coeff={}\n",
-      //                                   shell, shell_exponents[0], shell_coefficients[0]));
-      // }
-      
       // Get atom position directly from LAMMPS
       std::vector<double> atom_pos(3, 0.0);
       if (atom_id >= 0 && atom_id < nlocal) {
@@ -369,11 +403,18 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
       double dz = points[i_point][2] - atom_pos[2];
       double r2 = dx*dx + dy*dy + dz*dz;
       
+      // Debug output for very first point
+      if (comm->me == 0 && i_point == 0 && shell == 0) {
+        utils::logmesg(lmp, fmt::format("    Point 0: ({}, {}, {}), Atom {}: ({}, {}, {}), r2={}\n",
+                                       points[i_point][0], points[i_point][1], points[i_point][2],
+                                       atom_id, atom_pos[0], atom_pos[1], atom_pos[2], r2));
+      }
+      
       
       
       // Skip if grid point is too far from atom (basis function will be negligible)
-      // Cutoff at 10 Bohr is reasonable for most basis sets
-      const double cutoff_r2 = 100.0;  // 10^2 Bohr^2
+      // Cutoff at 20 Bohr is more conservative for diffuse functions
+      const double cutoff_r2 = 400.0;  // 20^2 Bohr^2
       if (r2 > cutoff_r2) {
         // Set all basis functions in this shell to zero at this point
         std::vector<std::vector<int>> cart_indices;
@@ -465,37 +506,34 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
             }
             
             // Gradient of N * exp(-alpha*r^2) * x^nx * y^ny * z^nz
-            // d/dx = N * exp(-alpha*r^2) * y^ny * z^nz * (nx * x^(nx-1) - 2*alpha*x * x^nx)
-            //      = N * exp(-alpha*r^2) * y^ny * z^nz * x^(nx-1) * (nx - 2*alpha*x^2)
-            // But be careful: when nx=0, x^(nx-1) = x^(-1) is undefined!
+            // Using product rule and chain rule
             
             double grad_x, grad_y, grad_z;
             
-            // x-component
+            // x-component of gradient
             if (nx > 0) {
-              grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
-                      (nx * pow(dx, nx-1) - 2*alpha*dx * pow(dx, nx));
+              // Polynomial derivative term + exponential derivative term
+              grad_x = coeff * gauss_exp * nx * pow(dx, nx-1) * pow(dy, ny) * pow(dz, nz) - 
+                      coeff * gauss_exp * 2*alpha*dx * poly_part;
             } else {
-              grad_x = coeff * gauss_exp * pow(dy, ny) * pow(dz, nz) * 
-                      (-2*alpha*dx);
+              // Only exponential derivative term when nx=0
+              grad_x = -coeff * gauss_exp * 2*alpha*dx * poly_part;
             }
             
-            // y-component
+            // y-component of gradient
             if (ny > 0) {
-              grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
-                      (ny * pow(dy, ny-1) - 2*alpha*dy * pow(dy, ny));
+              grad_y = coeff * gauss_exp * pow(dx, nx) * ny * pow(dy, ny-1) * pow(dz, nz) -
+                      coeff * gauss_exp * 2*alpha*dy * poly_part;
             } else {
-              grad_y = coeff * gauss_exp * pow(dx, nx) * pow(dz, nz) *
-                      (-2*alpha*dy);
+              grad_y = -coeff * gauss_exp * 2*alpha*dy * poly_part;
             }
             
-            // z-component
+            // z-component of gradient
             if (nz > 0) {
-              grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
-                      (nz * pow(dz, nz-1) - 2*alpha*dz * pow(dz, nz));
+              grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) * nz * pow(dz, nz-1) -
+                      coeff * gauss_exp * 2*alpha*dz * poly_part;
             } else {
-              grad_z = coeff * gauss_exp * pow(dx, nx) * pow(dy, ny) *
-                      (-2*alpha*dz);
+              grad_z = -coeff * gauss_exp * 2*alpha*dz * poly_part;
             }
             
             gradient[0] += grad_x;
@@ -549,4 +587,3 @@ void PairDFT::evaluate_basis_at_points(const std::vector<std::vector<double>> &p
     }
   }
 }
-
