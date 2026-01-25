@@ -40,7 +40,7 @@
 
 using namespace LAMMPS_NS;
 
-static int compare_tags(const bigint, const bigint, void *);
+static int compare_tags(const int, const int, void *);
 
 struct psf_data {
   tagint tag, molecule;
@@ -276,7 +276,7 @@ void WritePsf::atoms()
 
   if (me == 0) {
 
-    bigint *order;
+    int *order;
     memory->create(order, natoms, "write_psf:order");
     for (int i = 0; i < natoms; i++) order[i] = i;
     utils::merge_sort(order, natoms, (void *)recvbuf, compare_tags);
@@ -631,7 +631,7 @@ void WritePsf::impropers()
    comparison function invoked by merge_sort()
 ------------------------------------------------------------------------- */
 
-int compare_tags(const bigint i, const bigint j, void *ptr)
+int compare_tags(const int i, const int j, void *ptr)
 {
   psf_data *buf = (psf_data *) ptr;
   if( buf[i].tag < buf[j].tag ) return -1;
