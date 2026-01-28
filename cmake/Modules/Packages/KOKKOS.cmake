@@ -104,7 +104,12 @@ if(APPLE)
     message(STATUS "Using Apple Clang with libomp at ${LIBOMP_PREFIX}")
 
     #set(OpenMP_C_FLAGS       "-Xclang -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "" FORCE)
-    set(OpenMP_CXX_FLAGS     "-Xclang -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "" FORCE)
+    #set(OpenMP_CXX_FLAGS     "-Xclang -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "" FORCE)
+
+
+    set(OpenMP_ROOT     "${LIBOMP_PREFIX}" CACHE STRING "" FORCE)
+    
+
     set(OpenMP_C_LIB_NAMES   "omp" CACHE STRING "" FORCE)
     set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
     set(OpenMP_omp_LIBRARY   "${LIBOMP_PREFIX}/lib/libomp.dylib" CACHE STRING "" FORCE)
