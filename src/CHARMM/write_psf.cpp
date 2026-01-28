@@ -234,9 +234,13 @@ void WritePsf::atoms()
     }
   }
 
-  // allocate local buffer
-  //psf_data *sendbuf = new psf_data[natoms_local];
-  std::vector<psf_atom> atoms_local;
+  struct psf_atom {
+    tagint tag, molecule;
+    int type;
+    double q;
+    char segment[9], residue[9], name[9];
+  };
+  std::vector<psf_atom> atoms_local, psf_atoms;
   atoms_local.resize(natoms_local);
     
   // fill local buffer
