@@ -37,6 +37,7 @@
 #include "utils.h"
 
 #include <cstring>
+#include <algorithm>
 
 using namespace LAMMPS_NS;
 
