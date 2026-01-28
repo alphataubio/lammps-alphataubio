@@ -60,35 +60,6 @@ class WritePsf : public Command {
   //int pack_dihedral(tagint **);
   //int pack_improper(tagint **);
 
-/*
-  int size_one;    // # of quantities for one atom
-  int nme;         // # of atoms in this dump from me
-
-  bigint ntotal;            // total # of per-atom lines in snapshot
-  int reorderflag;          // 1 if OK to reorder instead of sort
-  bigint ntotal_reorder;    // # of atoms that must be in snapshot
-  int nme_reorder;          // # of atoms I must own in snapshot
-  tagint idlo;              // lowest ID I own when reordering
-
-  int maxbuf;     // size of buf
-  double *buf;    // memory for atom quantities
-  int maxids;     // size of ids
-  int maxsort;    // size of bufsort, idsort, index
-  int maxproc;    // size of proclist
-  tagint *ids;    // list of atom IDs, if sorting on IDs
-  double *bufsort;
-  tagint *idsort;
-*/
-
-  int *index, *proclist;
-
-  void sort();
-#if defined(LMP_QSORT)
-  static int idcompare(const void *, const void *);
-#else
-  static int idcompare(const int, const int, void *);
-#endif
-
 };
 
 

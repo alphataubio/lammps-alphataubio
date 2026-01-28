@@ -364,10 +364,6 @@ void WritePsf::bonds()
         recvrow /= ncol;
       } else recvrow = sendrow;
 
-      // void AtomVec::write_bond(FILE *fp, int n, tagint **buf, int index)
-      // atom->avec->write_bond(fp,recvrow,buf,index);
-      index += recvrow;
-
       for (int i = 0; i < recvrow; i++) {
         fmt::print(fp, " {:9} {:9}", buf[i][1], buf[i][2]);
         j++;
@@ -444,7 +440,6 @@ void WritePsf::angles()
   int tmp,recvrow;
   int j = 0;
 
-  int index = 1;
   if (me == 0) {
     MPI_Status status;
     MPI_Request request;
@@ -459,8 +454,6 @@ void WritePsf::angles()
         MPI_Get_count(&status,MPI_LMP_TAGINT,&recvrow);
         recvrow /= ncol;
       } else recvrow = sendrow;
-
-      index += recvrow;
 
       for (int i = 0; i < recvrow; i++) {
         fmt::print(fp, " {:9} {:9} {:9}", buf[i][1], buf[i][2], buf[i][3]);
@@ -511,7 +504,6 @@ void WritePsf::dihedrals()
   int tmp,recvrow;
   int j = 0;
 
-  int index = 1;
   if (me == 0) {
     MPI_Status status;
     MPI_Request request;
@@ -526,8 +518,6 @@ void WritePsf::dihedrals()
         MPI_Get_count(&status,MPI_LMP_TAGINT,&recvrow);
         recvrow /= ncol;
       } else recvrow = sendrow;
-
-      index += recvrow;
 
       for (int i = 0; i < recvrow; i++) {
         fmt::print(fp, " {:9} {:9} {:9} {:9}", buf[i][1], buf[i][2], buf[i][3], buf[i][4]);
@@ -578,7 +568,6 @@ void WritePsf::impropers()
   int tmp,recvrow;
   int j = 0;
 
-  int index = 1;
   if (me == 0) {
     MPI_Status status;
     MPI_Request request;
@@ -593,8 +582,6 @@ void WritePsf::impropers()
         MPI_Get_count(&status,MPI_LMP_TAGINT,&recvrow);
         recvrow /= ncol;
       } else recvrow = sendrow;
-
-      index += recvrow;
 
       for (int i = 0; i < recvrow; i++) {
         fmt::print(fp, " {:9} {:9} {:9} {:9}", buf[i][1], buf[i][2], buf[i][3], buf[i][4]);
