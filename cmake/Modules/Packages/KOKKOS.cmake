@@ -56,14 +56,10 @@ if(APPLE)
     find_program(CMAKE_CXX_COMPILER NAMES clang++ g++ PATHS /opt/homebrew/bin /usr/bin)
   endif()
   
-  message(STATUS "*** ok 1")
-
   if(NOT CMAKE_C_COMPILER OR NOT CMAKE_CXX_COMPILER)
     message(FATAL_ERROR "No suitable C or C++ compiler found on macOS")
   endif()
   
-  message(STATUS "*** ok 2")
-
   # Detect compiler type
   execute_process(
     COMMAND ${CMAKE_CXX_COMPILER} -dumpversion
@@ -71,8 +67,6 @@ if(APPLE)
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   
-  message(STATUS "*** ok 3")
-
   # Use INPUT_FILE /dev/null to prevent the compiler from waiting on stdin
   execute_process(
     COMMAND ${CMAKE_CXX_COMPILER} -dM -E -
@@ -86,8 +80,6 @@ if(APPLE)
     message(WARNING "Failed to detect compiler macros: ${COMPILER_STDERR}")
   endif()
   
-  message(STATUS "*** ok 4")
-
   if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
     set(COMPILER_IS_APPLECLANG TRUE)
   elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
@@ -95,9 +87,6 @@ if(APPLE)
   else()
     message(FATAL_ERROR "Unsupported compiler for macOS OpenMP: ${CMAKE_CXX_COMPILER_ID}")
   endif()
-  
-  message(STATUS "*** ok 5")
-
 
   # --------- OpenMP flags ----------
   if(COMPILER_IS_APPLECLANG)
@@ -114,7 +103,7 @@ if(APPLE)
 
     message(STATUS "Using Apple Clang with libomp at ${LIBOMP_PREFIX}")
 
-    set(OpenMP_C_FLAGS       "-Xclang -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "" FORCE)
+    #set(OpenMP_C_FLAGS       "-Xclang -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "" FORCE)
     set(OpenMP_CXX_FLAGS     "-Xclang -fopenmp -I${LIBOMP_PREFIX}/include" CACHE STRING "" FORCE)
     set(OpenMP_C_LIB_NAMES   "omp" CACHE STRING "" FORCE)
     set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
