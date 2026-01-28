@@ -22,6 +22,8 @@ CommandStyle(write_psf,WritePsf);
 
 #include "command.h"
 
+#include <unordered_map>
+
 namespace LAMMPS_NS {
 
 class WritePsf : public Command {
@@ -47,6 +49,8 @@ class WritePsf : public Command {
     char segment[9], residue[9], name[9];
   };
   std::vector<psf_atom> psf_atoms;
+  
+  std::unordered_map<tagint, tagint> tag_to_index;
 
   void header();
   void atoms();

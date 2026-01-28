@@ -254,15 +254,14 @@ void WritePsf::atoms()
     }
   }
 
-  // allocate receive buffer on root
-  if (me == 0) psf_atoms.resize(natoms);
-
-  // convert counts to bytes
-  if (me == 0)
+  if (me == 0) {
+    psf_atoms.resize(natoms);
+    tag_to_index.reserve(natoms);
     for (int i = 0; i < nprocs; i++) {
       recvcounts[i] *= sizeof(psf_atom);
       displs[i]     *= sizeof(psf_atom);
     }
+  }
 
   MPI_Gatherv(atoms_local.data(), natoms_local * sizeof(psf_atom), MPI_BYTE,
               psf_atoms.data(), recvcounts, displs, MPI_BYTE, 0, world);
@@ -274,7 +273,9 @@ void WritePsf::atoms()
 
     fmt::print(fp, "\n {:8} !NATOM\n", natoms);
 
-    for (const auto& a : psf_atoms) {
+    for (int i = 0; i < psf_atoms.size(); i++) {
+      const auto& a = psf_atoms[i];
+      tag_to_index[a.tag] = i;
       fmt::print(fp, "{:10} ", a.tag);
       fmt::print(fp, "{:<8} ", a.segment);
       fmt::print(fp, "{:<8} ", a.molecule);
@@ -365,7 +366,7 @@ void WritePsf::bonds()
       } else recvrow = sendrow;
 
       for (int i = 0; i < recvrow; i++) {
-        fmt::print(fp, " {:9} {:9}", buf[i][1], buf[i][2]);
+        fmt::print(fp, " {:9} {:9}", tag_to_index[buf[i][1]]+1, tag_to_index[buf[i][2]]+1);
         j++;
         if( j % 4 == 0) // newline every 4 bonds
           fmt::print(fp, "\n");
