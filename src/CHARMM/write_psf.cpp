@@ -40,15 +40,6 @@
 
 using namespace LAMMPS_NS;
 
-static int compare_tags(const int, const int, void *);
-
-struct psf_data {
-  tagint tag, molecule;
-  int type;
-  double q;
-  char segment[9], residue[9], name[9];
-};
-
 /* ---------------------------------------------------------------------- */
 
 WritePsf::WritePsf(LAMMPS *lmp) : Command(lmp)
@@ -244,62 +235,58 @@ void WritePsf::atoms()
   }
 
   // allocate local buffer
-  psf_data *sendbuf = new psf_data[natoms_local];
-
+  //psf_data *sendbuf = new psf_data[natoms_local];
+  std::vector<psf_atom> atoms_local;
+  atoms_local.resize(natoms_local);
+    
   // fill local buffer
   int j = 0;
   for (int i = 0; i < atom->nlocal; i++) {
     if (atom->mask[i] & groupbit) {
-      sendbuf[j].tag      = atom->tag[i];
-      sendbuf[j].molecule = atom->molecule[i];
-      sendbuf[j].type     = atom->type[i];
-      sendbuf[j].q        = atom->q_flag ? atom->q[i] : 0.0;
-      std::strncpy(sendbuf[j].segment, atom->segment[i], 8);
-      std::strncpy(sendbuf[j].residue, atom->residue[i], 8);
-      std::strncpy(sendbuf[j].name,    atom->name[i],    8);
+      atoms_local[j].tag      = atom->tag[i];
+      atoms_local[j].molecule = atom->molecule[i];
+      atoms_local[j].type     = atom->type[i];
+      atoms_local[j].q        = atom->q_flag ? atom->q[i] : 0.0;
+      std::strncpy(atoms_local[j].segment, atom->segment[i], 8);
+      std::strncpy(atoms_local[j].residue, atom->residue[i], 8);
+      std::strncpy(atoms_local[j].name,    atom->name[i],    8);
       j++;
     }
   }
 
   // allocate receive buffer on root
-  psf_data *recvbuf = nullptr;
-  if (me == 0) recvbuf = new psf_data[natoms];
+  if (me == 0) psf_atoms.resize(natoms);
 
   // convert counts to bytes
   if (me == 0)
     for (int i = 0; i < nprocs; i++) {
-      recvcounts[i] *= sizeof(psf_data);
-      displs[i]     *= sizeof(psf_data);
+      recvcounts[i] *= sizeof(psf_atom);
+      displs[i]     *= sizeof(psf_atom);
     }
 
-  MPI_Gatherv(sendbuf, natoms_local * sizeof(psf_data), MPI_BYTE, recvbuf, recvcounts, displs, MPI_BYTE, 0, world);
+  MPI_Gatherv(atoms_local.data(), natoms_local * sizeof(psf_atom), MPI_BYTE,
+              psf_atoms.data(), recvcounts, displs, MPI_BYTE, 0, world);
 
   if (me == 0) {
+  
+    std::sort(psf_atoms.begin(), psf_atoms.end(),
+              [](const psf_atom& a, const psf_atom& b) { return a.tag < b.tag; });
 
-    int *order;
-    memory->create(order, natoms, "write_psf:order");
-    for (int i = 0; i < natoms; i++) order[i] = i;
-    utils::merge_sort(order, natoms, (void *)recvbuf, compare_tags);
+    fmt::print(fp, "\n {:8} !NATOM\n", natoms);
 
-    fmt::print(fp,"\n {:8} !NATOM\n",natoms);
-
-    for (int i = 0; i < natoms; i++) {
-      // II,LSEGID,LRESID,LRES,TYPE(I),IAC(I),CG(I),AMASS(I),IMOVE(I)
-      // (I10,1X,A8,1X,A8,1X,A8,1X,A8,1X,A4,1X,2G14.6,I8)
-      int j = order[i];
-      fmt::print(fp, "{:10} ", recvbuf[j].tag );
-      fmt::print(fp, "{:<8} ", recvbuf[j].segment );
-      fmt::print(fp, "{:<8} ", recvbuf[j].molecule );
-      fmt::print(fp, "{:<8} ", recvbuf[j].residue );
-      fmt::print(fp, "{:<8} ", recvbuf[j].name );
-      fmt::print(fp, "{:<4} ", atom->lmap->find(recvbuf[j].type, Atom::ATOM) );
-      fmt::print(fp, "{:12.6F}      ", recvbuf[j].q );
-      fmt::print(fp, "{:8g}           0\n", atom->mass[recvbuf[j].type] );
+    for (const auto& a : psf_atoms) {
+      fmt::print(fp, "{:10} ", a.tag);
+      fmt::print(fp, "{:<8} ", a.segment);
+      fmt::print(fp, "{:<8} ", a.molecule);
+      fmt::print(fp, "{:<8} ", a.residue);
+      fmt::print(fp, "{:<8} ", a.name );
+      fmt::print(fp, "{:<4} ", atom->lmap->find(a.type, Atom::ATOM) );
+      fmt::print(fp, "{:12.6F}      ", a.q );
+      fmt::print(fp, "{:8g}           0\n", atom->mass[a.type] );
     }
-    memory->destroy(order);
   }
 
-  delete[] sendbuf;
+
   delete[] recvcounts;
   delete[] displs;
   
@@ -626,15 +613,4 @@ void WritePsf::impropers()
   }
 
   memory->destroy(buf);
-}
-
-/* ----------------------------------------------------------------------
-   comparison function invoked by merge_sort()
-------------------------------------------------------------------------- */
-
-int compare_tags(const int i, const int j, void *ptr)
-{
-  psf_data *buf = (psf_data *) ptr;
-  if( buf[i].tag < buf[j].tag ) return -1;
-  else return 1;
 }

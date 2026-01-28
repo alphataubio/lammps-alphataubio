@@ -39,6 +39,14 @@ class WritePsf : public Command {
   bigint nangles_local, nangles;
   bigint ndihedrals_local, ndihedrals;
   bigint nimpropers_local, nimpropers;
+  
+  struct psf_atom {
+    tagint tag, molecule;
+    int type;
+    double q;
+    char segment[9], residue[9], name[9];
+  };
+  std::vector<psf_atom> psf_atoms;
 
   void header();
   void atoms();
