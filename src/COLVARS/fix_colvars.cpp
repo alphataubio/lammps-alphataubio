@@ -94,10 +94,9 @@ FixColvars::FixColvars(LAMMPS *lmp, int narg, char **arg) :
   scalar_flag = 1;
   extscalar = 1;
 
-  vector_flag = 1;
-  size_vector = 0;
-  size_vector_variable = 1;
-  extvector = 0; // dont scale colvars values by number of atoms
+  array_flag = 1;
+  size_array_rows_variable = 1;
+  extarray = 0; // dont scale colvars values by number of atoms
   thermo_modify_colname = 1;
 
   global_freq = 1;
@@ -252,6 +251,14 @@ int FixColvars::setmask()
   return mask;
 }
 
+/* ---------------------------------------------------------------------- */
+
+void FixColvars::post_constructor()
+{
+  if (comm->me == 0) proxy->parse_module_config();
+  update_colvars();
+}
+
 
 void FixColvars::init()
 {
@@ -284,8 +291,6 @@ void FixColvars::init()
     }
   }
 #endif // defined(COLVARS_MPI)
-
-
 }
 
 
@@ -376,9 +381,8 @@ int FixColvars::modify_param(int narg, char **arg)
   int return_code = parse_fix_arguments(narg, arg, false);
 
   if (return_code >= 0) {
-    // update size_vector in case fix_modify changed number of colvars
-    if (comm->me == 0) size_vector = proxy->colvars->num_variables();
-    MPI_Bcast(&size_vector, 1, MPI_INT, 0, world);
+    // update colvars in case fix_modify changed them
+    update_colvars();
     // A fix colvars argument was detected, return directly
     return return_code;
   }
@@ -469,11 +473,7 @@ void FixColvars::setup(int vflag)
 
   if (me == 0) {
     setup_io();
-    proxy->parse_module_config();
-    size_vector = proxy->colvars->num_variables();
   }
-  MPI_Bcast(&size_vector, 1, MPI_INT, 0, world);
-  output->thermo->colname_auto();
 
   init_taglist();
 
@@ -940,34 +940,57 @@ double FixColvars::compute_scalar()
 
 /* ---------------------------------------------------------------------- */
 
-double FixColvars::compute_vector(int i)
+void FixColvars::update_colvars()
 {
-  double value;
+  int sizes_array[2];
   if (comm->me == 0) {
-    auto *variables = proxy->colvars->variables();
-    value = (*variables)[i]->value();
+    const auto& variables = *proxy->colvars->variables();
+    size_array_rows = variables.size();
+    size_array_cols = 0;
+    for( int i=0; i<size_array_rows ; i++ ) {
+      const auto& v = variables[i]->value();
+      size_array_cols = std::max(size_array_cols, static_cast<int>(v.size()));
+    }
+    sizes_array[0] = size_array_rows;
+    sizes_array[1] = size_array_cols;
+  }
+  MPI_Bcast(sizes_array, 2, MPI_INT, 0, world);
+  size_array_rows = sizes_array[0];
+  size_array_cols = sizes_array[1];
+  output->thermo->colname_auto();
+}
+
+double FixColvars::compute_array(int m, int n)
+{
+  double value = 0.0;
+  if (comm->me == 0) {
+    const auto& variables = *proxy->colvars->variables();
+    if (m >= variables.size())
+      error->all(FLERR, "f_{}[{}][{}] out-of-bounds: {} collective variables available.",
+                 id, m+1, n+1, variables.size());
+    const auto& variable = variables[m]->value();
+    if (n >= variable.size())
+      error->all(FLERR, "f_{}[{}][{}] out-of-bounds: collective variable {} has size {}.",
+                 id, m+1, n+1, get_thermo_colname(m), variable.size());
+    value = variable[n];
   }
   MPI_Bcast(&value, 1, MPI_DOUBLE, 0, world);
   return value;
 }
 
-/* ---------------------------------------------------------------------- */
-
-std::string FixColvars::get_thermo_colname(int i)
+std::string FixColvars::get_thermo_colname(int m)
 {
-  if (i == -1) return "CV(Energy)";
+  // scalar value if n == -1
+  if (m == -1) return fmt::format("f_{}:energy", id);
   std::string name;
-  int name_length;
   if (comm->me == 0) {
     auto *variables = proxy->colvars->variables();
-    if ( i < variables->size() ) {
-      name = "CV(" + (*variables)[i]->name + ")";
-      name_length = name.length();
-    } else {
-      name = "";
-      name_length = 0;
-    }
+    if ( m < variables->size() )
+      name = fmt::format("f_{}:{}[{}]", id, (*variables)[m]->name, m+1);
+    else
+      name = "none";
   }
+  int name_length = name.length();
   MPI_Bcast(&name_length, 1, MPI_INT, 0, world);
   if (comm->me > 0) name.resize(name_length);
   MPI_Bcast(name.data(), name_length, MPI_CHAR, 0, world);
