@@ -49,6 +49,7 @@ class FixColvars : public Fix {
   ~FixColvars() override;
 
   int setmask() override;
+  void post_constructor() override;
   void init() override;
   void setup(int) override;
   int modify_param(int, char **) override;
@@ -59,7 +60,7 @@ class FixColvars : public Fix {
   void end_of_step() override;
   void post_run() override;
   double compute_scalar() override;
-  double compute_vector(int) override;
+  double compute_array(int, int) override;
   std::string get_thermo_colname(int) override;
   double memory_usage() override;
 
@@ -110,6 +111,8 @@ class FixColvars : public Fix {
   /// \param arg Array of strings
   /// \param fix_constructor If false, try Colvars commands if LAMMPS ones fail
   int parse_fix_arguments(int narg, char **arg, bool fix_constructor = true);
+
+  void update_colvars(); // update size_array_rows and colname_auto
 };
 
 }    // namespace LAMMPS_NS
