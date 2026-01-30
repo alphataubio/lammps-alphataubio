@@ -23,6 +23,7 @@ namespace LAMMPS_NS {
 class Thermo : protected Pointers {
   friend class MinCG;      // accesses compute_pe
   friend class DumpExtXYZ; // accesses compute_temp, compute_press, compute_pe
+  friend class FixColvars; // accesses colname_auto
  public:
   char *style;
   int normflag;    // 0 if do not normalize by atoms, 1 if normalize
