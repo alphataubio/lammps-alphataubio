@@ -2950,6 +2950,7 @@ void Set::invoke_segment(Action *action)
     if (!select[i]) continue;
     //if (varflag) coord = vec1[i];
     std::strncpy(segment[i], action->sview.data(), action->sview.size());
+    segment[i][action->sview.size()] = '\0';
   }
 }
 
@@ -2979,6 +2980,7 @@ void Set::invoke_residue(Action *action)
     if (!select[i]) continue;
     //if (varflag) coord = vec1[i];
     std::strncpy(residue[i], action->sview.data(), action->sview.size());
+    residue[i][action->sview.size()] = '\0';
   }
 }
 
