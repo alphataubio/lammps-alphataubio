@@ -635,7 +635,7 @@ commands are in the :doc:`Howto_viz` howto.
 
 .. versionchanged:: TBD
 
-   draw style *transparency* was added
+   draw style *transparent* was added
 
 The *region* keyword can be used to create a graphical representation of
 a :doc:`region <region>`.  This can be helpful in debugging the location
@@ -645,7 +645,7 @@ region-ID, the color for drawing the region, the draw style, and
 possible additional arguments as required by the draw style.
 
 Four draw styles of representing a region are available: *filled*\,
-*transparency*\, *frame*\, and *points*.  With draw style *filled* the
+*transparent*\, *frame*\, and *points*.  With draw style *filled* the
 surface of the region is triangulated and drawn.  For region styles that
 support open faces, surfaces for such open faces are skipped.  The style
 *transparent* is like *filled* but takes an additional parameter in the
@@ -844,15 +844,16 @@ color map.  The color map is used to assign a specific RGB
 based on the atom's attribute, which is a numeric value, e.g. its
 x-component of velocity if the atom-attribute "vx" was specified.
 
-The basic idea of a color map is that the atom-attribute will be
-within a range of values, and that range is associated with a series
-of colors (e.g. red, blue, green).  An atom's specific value (vx =
--3.2) can then mapped to the series of colors (e.g. halfway between
-red and blue), and a specific color is determined via an interpolation
-procedure.
+The basic idea of a color map is that the atom-attribute will be within
+a range of values, and that range is associated with a series of colors
+(e.g. red, blue, green).  An atom's specific value (vx = -3.2) can then
+mapped to the series of colors (e.g. halfway between red and blue), and
+a specific color is determined via an interpolation procedure.  There
+are some example command lines and resulting images at the end of this
+paragraph.
 
-There are many possible options for the color map, enabled by the
-*amap* keyword.  Here are the details.
+There are many possible options for the color map, enabled by the *amap*
+keyword.  Here are the details.
 
 The *lo* and *hi* settings determine the range of values allowed for
 the atom attribute.  If numeric values are used for *lo* and/or *hi*,
@@ -946,23 +947,71 @@ green.  The color of the atom is the color of its bin.  Note that the
 sequential color map is really a shorthand way of defining a discrete
 color map without having to specify where all the bin boundaries are.
 
-Here is an example of using a sequential color map to color all the
-atoms in individual molecules with a different color.  See the
-examples/pour/in.pour.2d.molecule input script for an example of how
-this is used.
+Here is an example for using a sequential color map to color all the
+atoms in individual molecules with a different color.  See below for how
+this can be used in the ``examples/pour/in.pour.2d.molecule`` input
+script.
 
 .. code-block:: LAMMPS
 
-   variable        colors string &
-                   "red green blue yellow white &
-                   purple pink orange lime gray"
-   variable        mol atom mol%10
-   dump            1 all image 250 image.*.jpg v_mol type &
-                   zoom 1.6 adiam 1.5
-   dump_modify     1 pad 5 amap 0 10 sa 1 10 ${colors}
+   variable    colors string "red green blue yellow white purple pink orange lime gray"
+   variable    mol2 atom mol%10
+   dump        2 all image 250 image.*.png v_mol2 type region slab black frame 0.25 &
+                               zoom 3.5 adiam 1.4 size 1200 600 fsaa yes shiny 0.2
+   dump_modify 2 pad 5 amap 0 10 sa 1 10 ${colors} backcolor darkgray boxcolor silver
 
-In this case, 10 colors are defined, and molecule IDs are
-mapped to one of the colors, even if there are 1000s of molecules.
+In this case, 10 colors are defined, and molecule IDs are mapped to one
+of the colors, even if there are 1000s of molecules.
+
+Here is an example for coloring the atoms in the "melt" example by their
+velocity with a custom continuous color map and using :doc:`fix
+graphics/labels <fix_graphics_labels>` to generate a colormap legend:
+
+.. code-block:: LAMMPS
+
+   # compute atom velocity
+   variable vel atom sqrt(vx*vx+vy*vy+vz*vz)
+
+   # overlay the top of the image with a horizontal color scale legend
+   fix obj all graphics/labels 100 colorscale "viz" "Atom Velocity (sigma/tau)" 300.0 560.0 0.0 size 24 &
+               transcolor none framecolor darkgray backcolor darkgray length 800
+
+   # output images and set atom color by the value of the variable "vel"
+   dump viz all image 100 melt-*.png v_vel type size 600 600 zoom 1.4 shiny 0.2 view 85 -5 &
+                          fsaa yes box yes 0.025 center s 0.5 0.5 0.6 fix obj const 1 0
+   dump_modify viz pad 6 boxcolor lightskyblue backcolor darkgray backcolor2 silver adiam * 1.2
+
+   # customize the color map using a continuous map with fractions
+   dump_modify viz amap 0.0 8 cf 0.0 6 min red 0.2 organge 0.4 green 0.6 darkcyan 0.8 blue max purple
+
+This is an altered *dump_modify* command line to generate a sequential color map:
+
+.. code-block:: LAMMPS
+
+   dump_modify viz amap 0.5 5.5 sf 0.167 6 red orange green darkcyan blue purple
+
+And another altered *dump_modify* command line to generate a discrete color map using absolute values:
+
+.. code-block:: LAMMPS
+
+   dump_modify viz amap 0.5 5.5 da 0.0 6 min 1.0 red 1.0 2.0 orange 2.0 3.0 green 3.0 4.0 darkcyan
+
+.. |amap1| image:: img/amap1.png
+   :width: 38%
+.. |amap2| image:: img/amap2.png
+   :width: 19%
+.. |amap3| image:: img/amap3.png
+   :width: 19%
+.. |amap4| image:: img/amap4.png
+   :width: 19%
+
+Here are images of the examples from above.
+
+|amap1|  |amap2|  |amap3|  |amap4|
+
+.. raw:: html
+
+   <center>(Click to see the full-size images)</center>
 
 ----------
 

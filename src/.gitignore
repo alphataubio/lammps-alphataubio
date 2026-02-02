@@ -247,6 +247,10 @@
 /inthash.h
 /fix_plumed.cpp
 /fix_plumed.h
+/fix_mbx.cpp
+/fix_mbx.h
+/pair_mbx.cpp
+/pair_mbx.h
 /dump_molfile.cpp
 /dump_molfile.h
 /molfile_interface.cpp

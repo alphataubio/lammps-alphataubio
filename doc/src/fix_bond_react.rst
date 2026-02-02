@@ -396,20 +396,21 @@ Wildcard atoms match to any atom type in the simulation.  Wildcard atoms
 can be used to reduce the number of reaction templates needed to model a
 set of similar reactions.  Wildcard atoms are specified in the Wildcards
 section of the map file.  The atom types of wildcard atoms in the
-simulation are not updated.  Any bond, angle, dihedral, or improper, that
-is defined in the reaction templates and contains a wildcard atom, will be
-updated by inferring its type from its constituent atom types.  To use
-wildcard atoms, a specific :doc:`type label <Howto_type_labels>` format is
-necessary to infer the types of higher-order interactions.  Bond, angle,
-dihedral, and improper type labels must contain their constituent atom
-types delimited by hyphens, e.g., ‘c2-c2-c2-n’ for a dihedral that contains
-three atoms of type 'c2' and one atom of 'n'.  Certain symmetries are
-considered to account for equivalent ways of writing higher-order
-interactions.  Type labels for bonds, angles, and dihedrals are assumed to
-be equivalent to those written in reverse order.  For example, an angle
-with type label 'c1-c2-n' is equivalent to 'n-c2-c1'.  Symmetries for
-impropers are more complex and are described on the doc page for each
-improper style in the 'Symmetry convention' section.
+simulation are not updated.  Any bond, angle, dihedral, or improper,
+that is defined in the reaction templates and contains a wildcard atom,
+will be updated by inferring its type from its constituent atom types.
+To use wildcard atoms, a specific :doc:`type label <Howto_type_labels>`
+format is necessary to infer the types of higher-order interactions.
+Bond, angle, dihedral, and improper type labels must contain their
+constituent atom types delimited by hyphens, e.g., 'c2-c2-c2-n' for a
+dihedral that contains three atoms of type 'c2' and one atom of 'n'.
+Certain symmetries are considered to account for equivalent ways of
+writing higher-order interactions.  Type labels for bonds, angles, and
+dihedrals are assumed to be equivalent to those written in reverse
+order.  For example, an angle with type label 'c1-c2-n' is equivalent to
+'n-c2-c1'.  Symmetries for impropers are more complex and are described
+on the doc page for each improper style in the 'Symmetry convention'
+section.
 
 The post-reacted molecule template contains a sample of the reaction
 site and its surrounding topology after the reaction has occurred. It

@@ -4543,15 +4543,15 @@ int Variable::special_function(const std::string &word, char *contents, Tree **t
 
     int value = -1;
     if (kind == "atom") {
-      value = atom->lmap->find(typestr,Atom::ATOM);
+      value = atom->lmap->find_type(typestr,Atom::ATOM);
     } else if (kind == "bond") {
-      value = atom->lmap->find(typestr,Atom::BOND);
+      value = atom->lmap->find_type(typestr,Atom::BOND);
     } else if (kind == "angle") {
-      value = atom->lmap->find(typestr,Atom::ANGLE);
+      value = atom->lmap->find_type(typestr,Atom::ANGLE);
     } else if (kind == "dihedral") {
-      value = atom->lmap->find(typestr,Atom::DIHEDRAL);
+      value = atom->lmap->find_type(typestr,Atom::DIHEDRAL);
     } else if (kind == "improper") {
-      value = atom->lmap->find(typestr,Atom::IMPROPER);
+      value = atom->lmap->find_type(typestr,Atom::IMPROPER);
     } else {
       print_var_error(FLERR, fmt::format("Invalid kind {} in {}() in variable", kind, word),ivar);
     }

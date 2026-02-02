@@ -1150,7 +1150,7 @@ char *utils::expand_type(const char *file, int line, const std::string &str, int
       lmp->error->all(file, line, "{} type string {} cannot be used without a labelmap",
                       labeltypes[mode], typestr);
 
-    int type = lmp->atom->lmap->find(typestr, mode);
+    int type = lmp->atom->lmap->find_type(typestr, mode);
     if (type == -1)
       lmp->error->all(file, line, "{} type string {} not found in labelmap", labeltypes[mode],
                       typestr);

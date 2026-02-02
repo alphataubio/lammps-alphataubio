@@ -34,6 +34,83 @@ rarely needed these days.
 
 ------------------------
 
+Basic workflow for loading LAMMPS trajectories in VMD
+=====================================================
+
+VMD can read native LAMMPS dump files (in text format not binary) and
+several other dump styles.  The native LAMMPS format is preferred since
+it contains simulation box information.  VMD does not support reading
+data files directly, but `the TopoTools plugin
+<https://www.ks.uiuc.edu/Research/vmd/plugins/topotools/>`_ does.  This
+step is usually necessary, since the LAMMPS dump files do not contain
+information about the molecular topology and elements and that
+information can be obtained from the data file.  There also is the
+`pbctools plugin
+<https://www.ks.uiuc.edu/Research/vmd/plugins/pbctools/>`_ that can be
+used for "repairing" bonds that are broken because one of its atom
+passed through a periodic boundary.  Because of using the plugins, the
+following commands need to be typed into the VMD console to read a
+trajectory.  The following commands are based on the ``peptide`` example
+to which the command ``dump 1 all atom 10 dump.peptide`` was added.
+Note the use of the group "all" in contrast to the commented out dump
+commands that use the group "peptide".  This is to match the number of
+atoms in the data file.  VMD does not support cases where the number of
+atoms change or you are trying to read in a subset of a system unless
+*all* files contain the same subset.
+
+.. code-block:: Tcl
+
+   # load data file including its coordinates
+   topo readlammpsdata data.peptide full
+   # atom style full is the default ^^^^ and can be omitted
+
+   # try to infer missing atom properties from available information
+   topo guessatom lammps data
+
+   # now add one of more dump files
+   mol addfile dump.peptide type lammpstrj waitfor all
+   # we tell VMD which file type ^^^^^^^^^ if the filename does not end in .lammpstrj
+
+   # jump to the first frame with the data file coordinates
+   animate goto 0
+   # if needed  use the following command to try and repair broken bonds
+   # pbc join fragment -now
+
+   # unwrap the entire trajectory to repair all broken bonds
+   # this is faster and more accurate than running `pbc join` for all frames
+   pbc unwrap -all
+   pbc wrap -all -compound fragment -orthorhombic
+   #       remove for triclinic box ^^^^^^^^^^^^^
+
+   # delete the coordinate frame from the data file
+   animate delete beg 0 end 0 top
+   # write out the topology information without coordinates to a PSF file
+   animate write psf peptide.psf top
+   # and the processed trajectory data to a DCD file for future use
+   animate write dcd peptide.dcd top waitfor all
+
+   ###############################################################
+   # the steps up to this line only need to be run once
+   ###############################################################
+   # set visualization defaults
+   display perspective orthographic
+   mol default style Licorice
+   mol default material Diffuse
+   display backgroundgradient on
+
+   # delete molecule and load psf and dcd file
+   mol delete top
+   mol new peptide.psf
+   mol addfile peptide.dcd waitfor all
+   pbc box
+
+To automate this process, you can also save these commands to a file,
+e.g. ``peptide.vmd`` and then load this file from the VMD "File" menu
+with "Load Visualization State..."  or type in the command console
+``play peptide.vmd``.
+
+------------------------
+
 Advanced graphics features in the *dump image* command
 ======================================================
 

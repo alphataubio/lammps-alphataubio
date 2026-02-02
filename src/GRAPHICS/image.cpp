@@ -13,7 +13,8 @@
 ------------------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------------
-   Contributing author: Nathan Fabian (Sandia)
+   Contributing authors: Nathan Fabian (Sandia)
+                     and Axel Kohlmeyer (Temple)
 ------------------------------------------------------------------------- */
 
 #include "image.h"
@@ -825,11 +826,34 @@ void Image::draw_pixmap(const double *x, int pixwidth, int pixheight, const unsi
   xc += width / 2;
   yc += height / 2;
 
+  // convert back to non-FSAA image coordinates, so we can re-use the pixmap drawing code
+  if (fsaa) {
+    xc /= 2;
+    yc /= 2;
+  }
+
+  draw_pixmap(xc, yc, pixwidth, pixheight, pixmap, transcolor, scale, opacity, dist);
+}
+
+/* ----------------------------------------------------------------------
+   scale and add pixmap centered at location xc, yc in image coordinates to image
+   background color indicates transparency and pixels in that color are skipped
+------------------------------------------------------------------------- */
+
+void Image::draw_pixmap(int xc, int yc, int pixwidth, int pixheight, const unsigned char *pixmap,
+                        double *transcolor, double scale, double opacity, double dist)
+{
   const unsigned char *mypixmap = pixmap;
   unsigned char *npixmap = nullptr;
 
-  // adjust scale factor for FSAA and only scale as much as needed.
-  if (fsaa) scale *= 2.0;
+  // adjust scale factor and image location for FSAA
+  if (fsaa) {
+    scale *= 2.0;
+    xc *= 2;
+    yc *= 2;
+  }
+
+  // only scale as much as needed.
   if (scale != 1.0) {
     int nwidth = std::lround(scale * pixwidth + 0.5);
     int nheight = std::lround(scale * pixheight + 0.5);
@@ -1730,6 +1754,15 @@ int Image::map_minmax(int index, double mindynamic, double maxdynamic)
 }
 
 /* ----------------------------------------------------------------------
+   get min/max bounds of dynamic color map index and return 1 if dynamic
+------------------------------------------------------------------------- */
+
+int Image::map_info(int index, double &min, double &max)
+{
+  return maps[index]->info(min, max);
+}
+
+/* ----------------------------------------------------------------------
    return 3-vector color corresponding to value from color map index
 ------------------------------------------------------------------------- */
 
@@ -2290,8 +2323,8 @@ ColorMap::ColorMap(LAMMPS *lmp, Image *caller) : Pointers(lmp)
 
   dynamic = 1;
 
-  mlo = MINVALUE;
-  mhi = MAXVALUE;
+  locurrent = mlo = MINVALUE;
+  hicurrent = mhi = MAXVALUE;
   mstyle = CONTINUOUS;
   mrange = FRACTIONAL;
 
@@ -2355,6 +2388,7 @@ int ColorMap::reset(int narg, char **arg)
   if (nentry < 1) return 5;
   delete [] mentry;
   mentry = new MapEntry[nentry];
+  mentry[0].svalue = 0.0;
 
   int n = 5;
   for (int i = 0; i < nentry; i++) {
@@ -2465,6 +2499,13 @@ int ColorMap::minmax(double mindynamic, double maxdynamic)
   }
 
   return 0;
+}
+
+int ColorMap::info(double &min, double &max)
+{
+  min = locurrent;
+  max = hicurrent;
+  return dynamic;
 }
 
 /* ----------------------------------------------------------------------
