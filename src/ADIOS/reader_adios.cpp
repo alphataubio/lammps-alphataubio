@@ -31,7 +31,6 @@
 #include "adios_common.h"
 
 using namespace LAMMPS_NS;
-using namespace LAMMPS_ADIOS;
 
 static constexpr double SMALL = 1.0e-6;
 
