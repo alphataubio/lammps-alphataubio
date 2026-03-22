@@ -368,10 +368,10 @@ void DumpCustomADIOS::init_style()
 
   domain->boundary_string(boundstr);
 
-  // Strip '%' from the filename (same rationale as dump_atom_adios).
+  // Shift the string left by one to delete the '%' character in-place.
   if (char *pct = std::strchr(filename, '%'); pct != nullptr) {
-    const std::size_t tail = std::strlen(pct) + 1;
-    std::shift_left(pct, pct + tail, 1);
+    const std::size_t tail = std::strlen(pct) + 1;    // include '\0'
+    std::memmove(pct, pct + 1, tail - 1);
   }
 
   // -----------------------------------------------------------------------

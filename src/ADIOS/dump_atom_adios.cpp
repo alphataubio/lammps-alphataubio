@@ -277,11 +277,10 @@ void DumpAtomADIOS::init_style()
   // ADIOS2 always produces a single global BP5 directory regardless of
   // the '%' multi-processor placeholder.  Strip any '%' from the filename
   // so the path passed to io.Open() is clean.
-  // std::shift_left (C++20) shifts the range [pct, end) left by one,
-  // effectively deleting the '%' character in-place.
+  // Shift the string left by one to delete the '%' character in-place.
   if (char *pct = std::strchr(filename, '%'); pct != nullptr) {
     const std::size_t tail = std::strlen(pct) + 1;    // include '\0'
-    std::shift_left(pct, pct + tail, 1);
+    std::memmove(pct, pct + 1, tail - 1);
   }
 
   // Build the column name list.

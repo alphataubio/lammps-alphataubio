@@ -27,7 +27,6 @@
 #include "universe.h"
 #include "update.h"
 
-#include <algorithm>       // std::shift_left
 #include <cstddef>         // std::size_t
 #include <cstring>         // std::strchr, std::strlen
 #include <filesystem>
@@ -336,10 +335,9 @@ void DumpLocalADIOS::init_style()
   DumpLocal::init_style();
 
   // Strip '%' from the filename: ADIOS2 always produces a single global
-  // BP5 directory and does not support per-process file splitting.
   if (char *pct = std::strchr(filename, '%'); pct != nullptr) {
-    const std::size_t tail = std::strlen(pct) + 1;
-    std::shift_left(pct, pct + tail, 1);
+    const std::size_t tail = std::strlen(pct) + 1;    // include '\0'
+    std::memmove(pct, pct + 1, tail - 1);
   }
 
   // ------------------------------------------------------------------
