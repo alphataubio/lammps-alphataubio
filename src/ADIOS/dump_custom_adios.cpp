@@ -45,7 +45,6 @@
 #include "adios_common.h"
 
 using namespace LAMMPS_NS;
-using namespace LAMMPS_ADIOS;
 
 // -------------------------------------------------------------------------
 // Pimpl implementation type
@@ -98,7 +97,7 @@ DumpCustomADIOS::DumpCustomADIOS(LAMMPS *lmp, int narg, char **arg)
   // See DumpAtomADIOS constructor for discussion of the MPI-concurrent race.
   namespace fs = std::filesystem;
   if (!fs::exists("adios2_config.xml")) {
-    if (std::ofstream cfg{"adios2_config.xml"}) { cfg << default_config; }
+    if (std::ofstream cfg{"adios2_config.xml"}) cfg << default_config;
   }
 
   try {
@@ -369,10 +368,10 @@ void DumpCustomADIOS::init_style()
 
   domain->boundary_string(boundstr);
 
-  // Strip '%' from the filename (same rationale as dump_atom_adios).
+  // Shift the string left by one to delete the '%' character in-place.
   if (char *pct = std::strchr(filename, '%'); pct != nullptr) {
-    const std::size_t tail = std::strlen(pct) + 1;
-    std::shift_left(pct, pct + tail, 1);
+    const std::size_t tail = std::strlen(pct) + 1;    // include '\0'
+    std::memmove(pct, pct + 1, tail - 1);
   }
 
   // -----------------------------------------------------------------------

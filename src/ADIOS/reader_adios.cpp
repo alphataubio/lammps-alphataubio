@@ -13,7 +13,7 @@
 
 /* ----------------------------------------------------------------------
    Contributing author:          Norbert Podhorszki (ORNL)
-   ADIOS 2.11.0 (BP5) and C++20: Mitch Murphy (alphataubio at gmail)
+   ADIOS 2.11.0 (BP5) and C++17: Mitch Murphy (alphataubio at gmail)
 ------------------------------------------------------------------------- */
 
 #include "reader_adios.h"
@@ -31,7 +31,6 @@
 #include "adios_common.h"
 
 using namespace LAMMPS_NS;
-using namespace LAMMPS_ADIOS;
 
 static constexpr double SMALL = 1.0e-6;
 

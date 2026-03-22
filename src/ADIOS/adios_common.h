@@ -56,4 +56,4 @@ inline constexpr std::string_view default_config =
 </adios-config>
 )xml";
 
-#endif
+#endif // !LMP_ADIOS_COMMON_H

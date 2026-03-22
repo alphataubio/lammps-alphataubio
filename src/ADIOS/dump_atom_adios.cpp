@@ -13,7 +13,7 @@
 
 /* ----------------------------------------------------------------------
    Contributing author:          Norbert Podhorszki (ORNL)
-   ADIOS 2.11.0 (BP5) and C++20: Mitch Murphy (alphataubio at gmail)
+   ADIOS 2.11.0 (BP5) and C++17: Mitch Murphy (alphataubio at gmail)
 ------------------------------------------------------------------------- */
 
 #include "dump_atom_adios.h"
@@ -41,28 +41,6 @@
 #include "adios_common.h"
 
 using namespace LAMMPS_NS;
-using namespace LAMMPS_ADIOS;
-
-// common definition for all ADIOS package classes
-
-const char *LAMMPS_ADIOS::default_config =
-    (const char *) "<?xml version=\"1.0\"?>\n"
-                   "<adios-config>\n"
-                   "    <io name=\"atom\">\n"
-                   "        <engine type=\"BP4\">\n"
-                   "            <parameter key=\"substreams\" value=\"1\"/>\n"
-                   "        </engine>\n"
-                   "    </io>\n"
-                   "    <io name=\"custom\">\n"
-                   "        <engine type=\"BP4\">\n"
-                   "            <parameter key=\"substreams\" value=\"1\"/>\n"
-                   "        </engine>\n"
-                   "    </io>\n"
-                   "    <io name=\"read_dump\">\n"
-                   "        <engine type=\"BP4\">\n"
-                   "        </engine>\n"
-                   "    </io>\n"
-                   "</adios-config>\n";
 
 // -------------------------------------------------------------------------
 // Pimpl implementation type
@@ -115,6 +93,7 @@ struct DumpAtomADIOSInternal {
 DumpAtomADIOS::DumpAtomADIOS(LAMMPS *lmp, int narg, char **arg)
     : DumpAtom(lmp, narg, arg), internal(std::make_unique<DumpAtomADIOSInternal>())
 {
+
   // Create a default adios2_config.xml if it does not already exist.
   //
   // In MPI runs every rank may reach this concurrently; since every rank
@@ -125,7 +104,7 @@ DumpAtomADIOS::DumpAtomADIOS(LAMMPS *lmp, int narg, char **arg)
   // deliberately avoids.
   namespace fs = std::filesystem;
   if (!fs::exists("adios2_config.xml")) {
-    if (std::ofstream cfg{"adios2_config.xml"}) { cfg << default_config; }
+    if (std::ofstream cfg{"adios2_config.xml"}) cfg << default_config;
   }
 
   try {
@@ -298,11 +277,10 @@ void DumpAtomADIOS::init_style()
   // ADIOS2 always produces a single global BP5 directory regardless of
   // the '%' multi-processor placeholder.  Strip any '%' from the filename
   // so the path passed to io.Open() is clean.
-  // std::shift_left (C++20) shifts the range [pct, end) left by one,
-  // effectively deleting the '%' character in-place.
+  // Shift the string left by one to delete the '%' character in-place.
   if (char *pct = std::strchr(filename, '%'); pct != nullptr) {
     const std::size_t tail = std::strlen(pct) + 1;    // include '\0'
-    std::shift_left(pct, pct + tail, 1);
+    std::memmove(pct, pct + 1, tail - 1);
   }
 
   // Build the column name list.
