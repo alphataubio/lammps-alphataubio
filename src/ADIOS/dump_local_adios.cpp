@@ -13,7 +13,7 @@
 
 /* ----------------------------------------------------------------------
    Contributing author:          Norbert Podhorszki (ORNL)
-   ADIOS 2.11.0 (BP5) and C++20: Mitch Murphy (alphataubio at gmail)
+   ADIOS 2.11.0 (BP5) and C++17: Mitch Murphy (alphataubio at gmail)
 ------------------------------------------------------------------------- */
 
 #include "dump_local_adios.h"
