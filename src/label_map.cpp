@@ -578,7 +578,7 @@ int LabelMap::infer_impropertype(const std::vector<std::string> &mytypes, std::a
 
       if (iorder) *iorder = {0, 1, 2, 3};
       for (int j = 0; j < 4; j++) {
-        if (std::string(force->improper_style) == "none" || force->improper->symmatoms[j] == 0) {
+        if (std::string(force->improper_style) == "none" || force->improper->symmatoms[j] != 1) {
           for (int k = 0; k < 4; k++) {
             if (itypes[j] == avail_types[k]) {
               avail_types[k] = "";

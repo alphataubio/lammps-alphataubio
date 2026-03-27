@@ -63,7 +63,7 @@ global, but can be set to different values for different combinations
 of particle types, as determined by the :doc:`pair_coeff <pair_coeff>`
 command.  If the contact model choice is the same for two particle
 types, the mixing for the cross-coefficients can be carried out
-automatically. This is shown in the last example, where model
+automatically. This is shown in one of the examples, where model
 choices are the same for type 1 - type 1 as for type 2 - type2
 interactions, but coefficients are different. In this case, the
 mixed coefficients for type 1 - type 2 interactions can be determined from

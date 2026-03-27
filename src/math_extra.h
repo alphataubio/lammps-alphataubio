@@ -88,7 +88,8 @@ inline void multiply_shape_shape(const double *one, const double *two, double *a
 // quaternion operations
 
 inline void qnormalize(double *q);
-inline void qconjugate(double *q, double *qc);
+inline void qconjugate(double *q,
+                       double *qc);    // would it be better to have q passed as const double?
 inline void vecquat(double *a, double *b, double *c);
 inline void quatvec(double *a, double *b, double *c);
 inline void quatquat(double *a, double *b, double *c);
@@ -116,15 +117,22 @@ void BuildRyMatrix(double R[3][3], const double angle);
 void BuildRzMatrix(double R[3][3], const double angle);
 
 // moment of inertia operations
-
+void inertia_ellipsoid(double *idiag, double *quat, double *inertia);    //superellipsoid version
 void inertia_ellipsoid(double *shape, double *quat, double mass, double *inertia);
 void inertia_line(double length, double theta, double mass, double *inertia);
 void inertia_triangle(double *v0, double *v1, double *v2, double mass, double *inertia);
 void inertia_triangle(double *idiag, double *quat, double mass, double *inertia);
 
-// triclinic bounding box of a spher
+// volume of ellipsoid
+double volume_ellipsoid(double *shape);
+double volume_ellipsoid(double *shape, double *block, int flag_super);
+
+// triclinic bounding box of a sphere
 
 void tribbox(double *, double, double *);
+
+// alternative to std::beta
+double beta(double x, double y);
 
 }    // namespace MathExtra
 
@@ -836,6 +844,11 @@ inline void MathExtra::outer3(const double *v1, const double *v2, double ans[3][
   ans[2][0] = v1[2] * v2[0];
   ans[2][1] = v1[2] * v2[1];
   ans[2][2] = v1[2] * v2[2];
+}
+
+inline double MathExtra::beta(double x, double y)
+{
+  return std::exp(std::lgamma(x) + std::lgamma(y) - std::lgamma(x + y));
 }
 
 #endif
