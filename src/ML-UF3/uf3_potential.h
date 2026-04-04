@@ -20,7 +20,7 @@ namespace LAMMPS_NS {
 
 class UF3Potential : protected Pointers {
  public:
-  UF3Potential(class LAMMPS *, const std::string &, double **cutsq_, int **, char **, int *);
+  UF3Potential(class LAMMPS *, const std::string &, double **cutsq_, int **, char **, int *, bool);
   ~UF3Potential() override;
 
   double memory_usage();
@@ -39,6 +39,8 @@ class UF3Potential : protected Pointers {
   double ****cached_constants_2b, ****cached_constants_2b_deri;
   double ****cached_constants_3b, ****cached_constants_3b_deri;
   double ****coeff_for_der_jk, ****coeff_for_der_ik, ****coeff_for_der_ij;
+
+  int max_num_knots_2b, max_num_coeff_2b, max_num_knots_3b, max_num_coeff_3b;
 
  protected:
 
@@ -61,20 +63,13 @@ class UF3Potential : protected Pointers {
 
   int (UF3Potential::*get_starting_index_2b_ptr)(int i, int j, double r);
   int (UF3Potential::*get_starting_index_3b_ptr)(int i, int j, int k, double r, int knot_dim);
-
   int get_starting_index_uniform_2b(int i, int j, double r);
   int get_starting_index_uniform_3b(int i, int j, int k, double r, int knot_dim);
-
   int get_starting_index_nonuniform_2b(int i, int j, double r);
   int get_starting_index_nonuniform_3b(int i, int j, int k, double r, int knot_dim);
 
-
-  int nbody_flag;
-  int max_num_knots_2b;
-  int max_num_coeff_2b;
-  int max_num_knots_3b;
-  int max_num_coeff_3b;
   int tot_interaction_count_3b;
+
 };
 
 }    // namespace LAMMPS_NS

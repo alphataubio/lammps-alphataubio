@@ -48,7 +48,6 @@ PairUF3::PairUF3(LAMMPS *lmp) : Pair(lmp), uf3_potential(nullptr), neighshort(nu
   centroidstressflag = CENTROID_AVAIL;
   manybody_flag = 1;
   pot_3b = false;
-  nbody_flag = 3;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -75,15 +74,15 @@ void PairUF3::settings(int narg, char **arg)
     error->all(FLERR,
                "Invalid number of arguments for pair_style uf3. "
                "Are you using a 2-body or 2 & 3-body UF potential?");
-  nbody_flag = utils::inumeric(FLERR, arg[0], true, lmp);
-  if (nbody_flag == 2) {
+  const int nbody = utils::inumeric(FLERR, arg[0], true, lmp);
+  if (nbody == 2) {
     pot_3b = false;
     manybody_flag = 0;
-  } else if (nbody_flag == 3) {
+  } else if (nbody == 3) {
     pot_3b = true;
     single_enable = 0;
   } else
-    error->all(FLERR, "Pair style uf3 not (yet) implemented for {}-body terms", nbody_flag);
+    error->all(FLERR, "Pair style uf3 not (yet) implemented for {}-body terms", nbody);
 }
 
 /* ----------------------------------------------------------------------
@@ -91,10 +90,9 @@ void PairUF3::settings(int narg, char **arg)
  * ---------------------------------------------------------------------- */
 void PairUF3::coeff(int narg, char **arg)
 {
-  if (narg != 3 + atom->ntypes) error->all(FLERR, "Invalid number of arguments uf3 in pair coeffs.");
-  uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements, map);
   if (!allocated) allocate();
   map_element2type(narg - 3, arg + 3, false);
+  uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements, map, pot_3b);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -107,7 +105,6 @@ void PairUF3::allocate()
   memory->create(setflag, np1, np1, "pair:setflag");
   memory->create(cutsq, np1, np1, "pair:cutsq");
   if (pot_3b) memory->create(neighshort, maxshort, "pair:neighshort");
-  uf3_potential->allocate();
 }
 
 /* ----------------------------------------------------------------------
@@ -132,7 +129,7 @@ void PairUF3::init_list(int /*id*/, class NeighList *ptr)
 /* ----------------------------------------------------------------------
    init for one type pair i,j and corresponding j,i
 ------------------------------------------------------------------------- */
-double PairUF3::init_one(int i /*i*/, int /*j*/ j)
+double PairUF3::init_one(int i, int j)
 {
   //init_one is called by pair.cpp at line 267 where it is squred
   //at line 268
@@ -649,9 +646,9 @@ double PairUF3::single(int /*i*/, int /*j*/, int itype, int jtype, double rsq,
 double PairUF3::memory_usage()
 {
   double bytes = Pair::memory_usage();
-  bytes += uf3_potential->memory_usage();
+  if (uf3_potential) bytes += uf3_potential->memory_usage();
   bytes += (double) maxshort * sizeof(int);    //neighshort
-  bytes += (double) 2 * sizeof(int);     //maxshort, nbody_flag
+  bytes += (double) 1 * sizeof(int);     //maxshort
   bytes += (double) 1 * sizeof(bool);    //pot_3b
   return bytes;
 }

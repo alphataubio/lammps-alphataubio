@@ -47,22 +47,13 @@ class PairUF3 : public Pair {
  protected:
 
   class UF3Potential *uf3_potential;
-
   int *neighshort, maxshort;    // short neighbor list array for 3body interaction
-
   bool pot_3b;
-
   virtual void allocate();
 
-  int nbody_flag;
-  int max_num_knots_2b;
-  int max_num_coeff_2b;
-  int max_num_knots_3b;
-  int max_num_coeff_3b;
-  int tot_interaction_count_3b;
 };
 
 }    // namespace LAMMPS_NS
 
-#endif
+#endif // !LMP_PAIR_UF3_H
 #endif

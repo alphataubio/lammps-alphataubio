@@ -37,9 +37,10 @@ using namespace LAMMPS_NS;
 
 /* ---------------------------------------------------------------------- */
 
-UF3Potential::UF3Potential(LAMMPS *lmp, const std::string &potf_name, double **cutsq_, int **setflag_, char **elements_, int *map_) :
+UF3Potential::UF3Potential(LAMMPS *lmp, const std::string &potf_name,
+                           double **cutsq_, int **setflag_, char **elements_, int *map_, bool pot_3b_) :
     Pointers(lmp),
-    cutsq(cutsq_), setflag(setflag_), elements(elements_), map(map_),
+    cutsq(cutsq_), setflag(setflag_), elements(elements_), map(map_), pot_3b(pot_3b_),
     setflag_3b(nullptr), knot_spacing_type_2b(nullptr), knot_spacing_type_3b(nullptr),
     cut_2b(nullptr), cut_3b(nullptr), cut_3b_list(nullptr), min_cut_3b(nullptr),
     knot_spacing_2b(nullptr), knot_spacing_3b(nullptr), n2b_knots_array(nullptr),
@@ -50,17 +51,21 @@ UF3Potential::UF3Potential(LAMMPS *lmp, const std::string &potf_name, double **c
     coeff_for_der_ij(nullptr), cached_constants_3b(nullptr), cached_constants_3b_deri(nullptr),
     get_starting_index_2b_ptr(nullptr), get_starting_index_3b_ptr(nullptr)
 {
-  pot_3b = false;
-  nbody_flag = 3;
+
+  allocated = 0;
   max_num_knots_2b = 0;
   max_num_coeff_2b = 0;
   max_num_knots_3b = 0;
   max_num_coeff_3b = 0;
   tot_interaction_count_3b = 0;
 
+  if (comm->me == 0) utils::logmesg(lmp, "Reading UF3 potential {}... ", potf_name);
+  double time1 = platform::walltime();
   allocate();
   uf3_read_unified_pot_file(potf_name);
   communicate();
+  create_bsplines();
+  if (comm->me == 0) utils::logmesg(lmp, "done ({:.2f} seconds).", platform::walltime() - time1);
 
 }
 
@@ -188,7 +193,7 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
   //Go through the file again and read the knots and coefficients
   //
 
-  const int ntypes = atom->ntypes;
+  const int num_of_elements = atom->ntypes;
 
   //if (true) {
   FILE *fp = utils::open_potential(potf_name, lmp, nullptr);
@@ -233,13 +238,13 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
         std::string element2 = fp2nd_line.next_string();
         int itype = 0;
         int jtype = 0;
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element1) {
             itype = i;
             break;
           }
         }
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element2) {
             jtype = i;
             break;
@@ -271,7 +276,8 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
 
           //cut is used in init_one which is called by pair.cpp at line 267
           //where the return of init_one is squared
-          cut_2b[itype][jtype] = cut_2b[jtype][itype] = fp3rd_line.next_double();
+          cut_2b[itype][jtype] = fp3rd_line.next_double();
+          cut_2b[jtype][itype] = cut_2b[itype][jtype];
 
           int num_knots_2b = fp3rd_line.next_int();
           n2b_knots_array_size[itype][jtype] = num_knots_2b;
@@ -313,19 +319,19 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
           int itype = 0;
           int jtype = 0;
           int ktype = 0;
-          for (int i = 1; i < ntypes + 1; i++) {
+          for (int i = 1; i < num_of_elements + 1; i++) {
             if (std::string(elements[map[i]]) == element1) {
               itype = i;
               break;
             }
           }
-          for (int i = 1; i < ntypes + 1; i++) {
+          for (int i = 1; i < num_of_elements + 1; i++) {
             if (std::string(elements[map[i]]) == element2) {
               jtype = i;
               break;
             }
           }
-          for (int i = 1; i < ntypes + 1; i++) {
+          for (int i = 1; i < num_of_elements + 1; i++) {
             if (std::string(elements[map[i]]) == element3) {
               ktype = i;
               break;
@@ -447,7 +453,7 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
                "Possibly no 2B UF3 potential block detected in {} file",
                potf_name);
   memory->destroy(n2b_knots_array);
-  memory->create(n2b_knots_array, ntypes + 1, ntypes + 1, max_num_knots_2b,
+  memory->create(n2b_knots_array, num_of_elements + 1, num_of_elements + 1, max_num_knots_2b,
                  "pair:n2b_knots_array");
 
   if (max_num_coeff_2b <= 0)
@@ -457,7 +463,7 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
                potf_name);
 
   memory->destroy(n2b_coeff_array);
-  memory->create(n2b_coeff_array, ntypes + 1, ntypes + 1, max_num_coeff_2b,
+  memory->create(n2b_coeff_array, num_of_elements + 1, num_of_elements + 1, max_num_coeff_2b,
                  "pair:n2b_coeff_array");
 
   if (pot_3b) {
@@ -502,13 +508,13 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
         std::string element2 = fp2nd_line.next_string();
         int itype = 0;
         int jtype = 0;
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element1) {
             itype = i;
             break;
           }
         }
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element2) {
             jtype = i;
             break;
@@ -594,19 +600,19 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
         int itype = 0;
         int jtype = 0;
         int ktype = 0;
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element1) {
             itype = i;
             break;
           }
         }
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element2) {
             jtype = i;
             break;
           }
         }
-        for (int i = 1; i < ntypes + 1; i++) {
+        for (int i = 1; i < num_of_elements + 1; i++) {
           if (std::string(elements[map[i]]) == element3) {
             ktype = i;
             break;
@@ -776,8 +782,8 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
   fclose(fp);
 
   //Set interaction of atom types of the same elements
-  for (int i = 1; i < ntypes + 1; i++) {
-    for (int j = 1; j < ntypes + 1; j++) {
+  for (int i = 1; i < num_of_elements + 1; i++) {
+    for (int j = 1; j < num_of_elements + 1; j++) {
       if (setflag[i][j] != 1) {
         //i-j interaction not set
 
@@ -812,10 +818,10 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
   }
 
   if (pot_3b) {
-    for (int i = 1; i < ntypes + 1; i++) {
-      for (int j = 1; j < ntypes + 1; j++) {
-        //for (int k = j; k < ntypes + 1; k++) {
-        for (int k = 1; k < ntypes + 1; k++) {
+    for (int i = 1; i < num_of_elements + 1; i++) {
+      for (int j = 1; j < num_of_elements + 1; j++) {
+        //for (int k = j; k < num_of_elements + 1; k++) {
+        for (int k = 1; k < num_of_elements + 1; k++) {
           if (setflag_3b[i][j][k] != 1) {
             //i-j-k interaction not set
 
@@ -1268,12 +1274,10 @@ double UF3Potential::memory_usage()
         max_num_coeff_3b * 3 * sizeof(double);    //coeff_for_der_jk coeff_for_der_ik coeff_for_der_ij
 
     bytes += (double) tot_interaction_count_3b * 3 * max_num_coeff_3b * 16 * sizeof(double);    //cached_constants_3b
-    bytes += (double) tot_interaction_count_3b * 3 * (max_num_coeff_3b - 1) * 16 * sizeof(double);    //cached_constants_3b_deri
+    bytes += (double) tot_interaction_count_3b * 3 * (max_num_coeff_3b - 1) * 9 * sizeof(double);    //cached_constants_3b_deri
   }
 
-  bytes += (double) 5 * sizeof(int);     //nbody_flag,
-                                         //max_num_knots_2b, max_num_coeff_2b,
-                                         //max_num_knots_3b, max_num_coeff_3b
+  bytes += (double) 4 * sizeof(int);     //max_num_knots_2b, max_num_coeff_2b, max_num_knots_3b, max_num_coeff_3b
   bytes += (double) 1 * sizeof(bool);    //pot_3b
 
   return bytes;
