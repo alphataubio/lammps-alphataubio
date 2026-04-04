@@ -28,6 +28,7 @@
 #include "memory.h"
 #include "neigh_list.h"
 #include "neighbor.h"
+#include "platform.h"
 #include "text_file_reader.h"
 
 #include <algorithm>
