@@ -140,10 +140,6 @@ double PairUF3::init_one(int i, int j)
 
 void PairUF3::compute(int eflag, int vflag)
 {
-  double del_rji[3], del_rki[3], del_rkj[3];
-  double fij[3], fik[3], fjk[3];
-  double fji[3], fki[3], fkj[3];
-  double Fi[3], Fj[3], Fk[3];
 
   ev_init(eflag, vflag);
 
@@ -169,9 +165,6 @@ void PairUF3::compute(int eflag, int vflag)
     int jnum = numneigh[i];
     int numshort = 0;
     for (int jj = 0; jj < jnum; jj++) {
-      double fx = 0;
-      double fy = 0;
-      double fz = 0;
       const int j = jlist[jj] & NEIGHMASK;
       const double delx = xtmp - x[j][0];
       const double dely = ytmp - x[j][1];
@@ -279,9 +272,9 @@ void PairUF3::compute(int eflag, int vflag)
     // jth atom
     jnum = numshort - 1;
     for (int jj = 0; jj < jnum; jj++) {
-      fij[0] = fji[0] = 0;
-      fij[1] = fji[1] = 0;
-      fij[2] = fji[2] = 0;
+
+      double del_rji[3], del_rki[3], del_rkj[3];
+
       const int j = neighshort[jj];
       const int jtype = type[j];
       del_rji[0] = x[j][0] - xtmp;
@@ -292,14 +285,6 @@ void PairUF3::compute(int eflag, int vflag)
 
       // kth atom
       for (int kk = jj + 1; kk < numshort; kk++) {
-
-        fik[0] = fki[0] = 0;
-        fik[1] = fki[1] = 0;
-        fik[2] = fki[2] = 0;
-
-        fjk[0] = fkj[0] = 0;
-        fjk[1] = fkj[1] = 0;
-        fjk[2] = fkj[2] = 0;
 
         const int k = neighshort[kk];
         const int ktype = type[k];
@@ -438,7 +423,10 @@ void PairUF3::compute(int eflag, int vflag)
             basis_jk_der[2] += rjk    * cached_constants_3b_deri[2][knot_start_index_jk - 1][1];
             basis_jk_der[2] += rjk_sq * cached_constants_3b_deri[2][knot_start_index_jk - 1][2];
 
-            double triangle_eval[4] = {0, 0, 0, 0};
+            double triangle_eval0 = 0.0;
+            double triangle_eval1 = 0.0;
+            double triangle_eval2 = 0.0;
+            double triangle_eval3 = 0.0;
             const int iknot_ij = knot_start_index_ij - 3;
             const int iknot_ik = knot_start_index_ik - 3;
             const int iknot_jk = knot_start_index_jk - 3;
@@ -452,7 +440,7 @@ void PairUF3::compute(int eflag, int vflag)
                 const double tmp1 = slice[1] * basis_jk[1];
                 const double tmp2 = slice[2] * basis_jk[2];
                 const double tmp3 = slice[3] * basis_jk[3];
-                triangle_eval[1] += factor * (tmp0 + tmp1 + tmp2 + tmp3);
+                triangle_eval1 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
               }
             }
 
@@ -465,7 +453,7 @@ void PairUF3::compute(int eflag, int vflag)
                 const double tmp1 = slice[1] * basis_jk[1];
                 const double tmp2 = slice[2] * basis_jk[2];
                 const double tmp3 = slice[3] * basis_jk[3];
-                triangle_eval[2] += factor * (tmp0 + tmp1 + tmp2 + tmp3);
+                triangle_eval2 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
               }
             }
 
@@ -477,48 +465,41 @@ void PairUF3::compute(int eflag, int vflag)
                 const double tmp0 = slice[0] * basis_jk_der[0];
                 const double tmp1 = slice[1] * basis_jk_der[1];
                 const double tmp2 = slice[2] * basis_jk_der[2];
-                triangle_eval[3] += factor * (tmp0 + tmp1 + tmp2);
+                triangle_eval3 += factor * (tmp0 + tmp1 + tmp2);
               }
             }
 
-            fij[0] = *(triangle_eval + 1) * (del_rji[0] / rij);
-            fji[0] = -fij[0];
-            fik[0] = *(triangle_eval + 2) * (del_rki[0] / rik);
-            fki[0] = -fik[0];
-            fjk[0] = *(triangle_eval + 3) * (del_rkj[0] / rjk);
-            fkj[0] = -fjk[0];
+            const double fij0 = triangle_eval1 * del_rji[0] / rij;
+            const double fik0 = triangle_eval2 * del_rki[0] / rik;
+            const double fjk0 = triangle_eval3 * del_rkj[0] / rjk;
 
-            fij[1] = *(triangle_eval + 1) * (del_rji[1] / rij);
-            fji[1] = -fij[1];
-            fik[1] = *(triangle_eval + 2) * (del_rki[1] / rik);
-            fki[1] = -fik[1];
-            fjk[1] = *(triangle_eval + 3) * (del_rkj[1] / rjk);
-            fkj[1] = -fjk[1];
+            const double fij1 = triangle_eval1 * del_rji[1] / rij;
+            const double fik1 = triangle_eval2 * del_rki[1] / rik;
+            const double fjk1 = triangle_eval3 * del_rkj[1] / rjk;
 
-            fij[2] = *(triangle_eval + 1) * (del_rji[2] / rij);
-            fji[2] = -fij[2];
-            fik[2] = *(triangle_eval + 2) * (del_rki[2] / rik);
-            fki[2] = -fik[2];
-            fjk[2] = *(triangle_eval + 3) * (del_rkj[2] / rjk);
-            fkj[2] = -fjk[2];
+            const double fij2 = triangle_eval1 * del_rji[2] / rij;
+            const double fik2 = triangle_eval2 * del_rki[2] / rik;
+            const double fjk2 = triangle_eval3 * del_rkj[2] / rjk;
 
-            Fi[0] = fij[0] + fik[0];
-            Fi[1] = fij[1] + fik[1];
-            Fi[2] = fij[2] + fik[2];
+            double Fi[3], Fj[3], Fk[3];
+
+            Fi[0] = fij0 + fik0;
+            Fi[1] = fij1 + fik1;
+            Fi[2] = fij2 + fik2;
             f[i][0] += Fi[0];
             f[i][1] += Fi[1];
             f[i][2] += Fi[2];
 
-            Fj[0] = fji[0] + fjk[0];
-            Fj[1] = fji[1] + fjk[1];
-            Fj[2] = fji[2] + fjk[2];
+            Fj[0] = -fij0 + fjk0;
+            Fj[1] = -fij1 + fjk1;
+            Fj[2] = -fij2 + fjk2;
             f[j][0] += Fj[0];
             f[j][1] += Fj[1];
             f[j][2] += Fj[2];
 
-            Fk[0] = fki[0] + fkj[0];
-            Fk[1] = fki[1] + fkj[1];
-            Fk[2] = fki[2] + fkj[2];
+            Fk[0] = -(fik0 + fjk0);
+            Fk[1] = -(fik1 + fjk1);
+            Fk[2] = -(fik2 + fjk2);
             f[k][0] += Fk[0];
             f[k][1] += Fk[1];
             f[k][2] += Fk[2];
@@ -534,60 +515,55 @@ void PairUF3::compute(int eflag, int vflag)
                   const double tmp1 = slice[1] * basis_jk[1];
                   const double tmp2 = slice[2] * basis_jk[2];
                   const double tmp3 = slice[3] * basis_jk[3];
-                  triangle_eval[0] += factor * (tmp0 + tmp1 + tmp2 + tmp3);
+                  triangle_eval0 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
                 }
               }
-              evdwl =* triangle_eval;
+              evdwl = triangle_eval0;
             }
 
             if (evflag) {
               ev_tally3(i, j, k, evdwl, 0, Fj, Fk, del_rji, del_rki);
               // Centroid stress 3-body term
               if (vflag_either && cvflag_atom) {
-                double ric[3];
-                ric[0] = THIRD * (-del_rji[0] - del_rki[0]);
-                ric[1] = THIRD * (-del_rji[1] - del_rki[1]);
-                ric[2] = THIRD * (-del_rji[2] - del_rki[2]);
 
-                cvatom[i][0] += ric[0] * Fi[0];
-                cvatom[i][1] += ric[1] * Fi[1];
-                cvatom[i][2] += ric[2] * Fi[2];
-                cvatom[i][3] += ric[0] * Fi[1];
-                cvatom[i][4] += ric[0] * Fi[2];
-                cvatom[i][5] += ric[1] * Fi[2];
-                cvatom[i][6] += ric[1] * Fi[0];
-                cvatom[i][7] += ric[2] * Fi[0];
-                cvatom[i][8] += ric[2] * Fi[1];
+                const double ric0 = THIRD * (-del_rji[0] - del_rki[0]);
+                const double ric1 = THIRD * (-del_rji[1] - del_rki[1]);
+                const double ric2 = THIRD * (-del_rji[2] - del_rki[2]);
+                cvatom[i][0] += ric0 * Fi[0];
+                cvatom[i][1] += ric1 * Fi[1];
+                cvatom[i][2] += ric2 * Fi[2];
+                cvatom[i][3] += ric0 * Fi[1];
+                cvatom[i][4] += ric0 * Fi[2];
+                cvatom[i][5] += ric1 * Fi[2];
+                cvatom[i][6] += ric1 * Fi[0];
+                cvatom[i][7] += ric2 * Fi[0];
+                cvatom[i][8] += ric2 * Fi[1];
 
-                double rjc[3];
-                rjc[0] = THIRD * (del_rji[0] - del_rkj[0]);
-                rjc[1] = THIRD * (del_rji[1] - del_rkj[1]);
-                rjc[2] = THIRD * (del_rji[2] - del_rkj[2]);
+                const double rjc0 = THIRD * (del_rji[0] - del_rkj[0]);
+                const double rjc1 = THIRD * (del_rji[1] - del_rkj[1]);
+                const double rjc2 = THIRD * (del_rji[2] - del_rkj[2]);
+                cvatom[j][0] += rjc0 * Fj[0];
+                cvatom[j][1] += rjc1 * Fj[1];
+                cvatom[j][2] += rjc2 * Fj[2];
+                cvatom[j][3] += rjc0 * Fj[1];
+                cvatom[j][4] += rjc0 * Fj[2];
+                cvatom[j][5] += rjc1 * Fj[2];
+                cvatom[j][6] += rjc1 * Fj[0];
+                cvatom[j][7] += rjc2 * Fj[0];
+                cvatom[j][8] += rjc2 * Fj[1];
 
-                cvatom[j][0] += rjc[0] * Fj[0];
-                cvatom[j][1] += rjc[1] * Fj[1];
-                cvatom[j][2] += rjc[2] * Fj[2];
-                cvatom[j][3] += rjc[0] * Fj[1];
-                cvatom[j][4] += rjc[0] * Fj[2];
-                cvatom[j][5] += rjc[1] * Fj[2];
-                cvatom[j][6] += rjc[1] * Fj[0];
-                cvatom[j][7] += rjc[2] * Fj[0];
-                cvatom[j][8] += rjc[2] * Fj[1];
-
-                double rkc[3];
-                rkc[0] = THIRD * (del_rki[0] + del_rkj[0]);
-                rkc[1] = THIRD * (del_rki[1] + del_rkj[1]);
-                rkc[2] = THIRD * (del_rki[2] + del_rkj[2]);
-
-                cvatom[k][0] += rkc[0] * Fk[0];
-                cvatom[k][1] += rkc[1] * Fk[1];
-                cvatom[k][2] += rkc[2] * Fk[2];
-                cvatom[k][3] += rkc[0] * Fk[1];
-                cvatom[k][4] += rkc[0] * Fk[2];
-                cvatom[k][5] += rkc[1] * Fk[2];
-                cvatom[k][6] += rkc[1] * Fk[0];
-                cvatom[k][7] += rkc[2] * Fk[0];
-                cvatom[k][8] += rkc[2] * Fk[1];
+                const double rkc0 = THIRD * (del_rki[0] + del_rkj[0]);
+                const double rkc1 = THIRD * (del_rki[1] + del_rkj[1]);
+                const double rkc2 = THIRD * (del_rki[2] + del_rkj[2]);
+                cvatom[k][0] += rkc0 * Fk[0];
+                cvatom[k][1] += rkc1 * Fk[1];
+                cvatom[k][2] += rkc2 * Fk[2];
+                cvatom[k][3] += rkc0 * Fk[1];
+                cvatom[k][4] += rkc0 * Fk[2];
+                cvatom[k][5] += rkc1 * Fk[2];
+                cvatom[k][6] += rkc1 * Fk[0];
+                cvatom[k][7] += rkc2 * Fk[0];
+                cvatom[k][8] += rkc2 * Fk[1];
               }
             }
           }
