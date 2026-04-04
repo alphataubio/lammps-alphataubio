@@ -57,6 +57,11 @@ UF3Potential::UF3Potential(LAMMPS *lmp, const std::string &potf_name, double **c
   max_num_knots_3b = 0;
   max_num_coeff_3b = 0;
   tot_interaction_count_3b = 0;
+
+  allocate();
+  uf3_read_unified_pot_file(potf_name);
+  communicate();
+
 }
 
 /* ---------------------------------------------------------------------- */
@@ -101,17 +106,6 @@ void UF3Potential::allocate()
 {
   allocated = 1;
   const int ntypes = atom->ntypes;
-
-  map = new int[ntypes + 1];    //No need to delete map as ~Pair deletes map
-
-  // Contains info about wether UF potential were found for type i and j
-  memory->create(setflag, ntypes + 1, ntypes + 1, "pair:setflag");
-
-  // Contains info about 2-body cutoff distance for type i and j
-  // cutsq is the global variable
-  // Even though we are making cutsq don't manually change the default values
-  // Lammps take care of setting the value
-  memory->create(cutsq, ntypes + 1, ntypes + 1, "pair:cutsq");
   // cut is specific to this pair style. We will set the values in cut
   memory->create(cut_2b, ntypes + 1, ntypes + 1, "pair:cut");
   //Contains info about type of knot_spacing--> 0 = uniform knot spacing (default)
@@ -177,19 +171,14 @@ void UF3Potential::allocate()
     memory->create(n3b_knots_array_size, tot_interaction_count_3b, 3, "pair:n3b_knots_array_size");
     memory->create(n3b_coeff_array_size, tot_interaction_count_3b, 3, "pair:n3b_coeff_array_size");
     for (int i = 0; i < tot_interaction_count_3b; i++) {
-      n3b_coeff_array_size[i][0] = 0;
-      n3b_coeff_array_size[i][1] = 0;
-      n3b_coeff_array_size[i][2] = 0;
-
-      n3b_knots_array_size[i][0] = 0;
-      n3b_knots_array_size[i][1] = 0;
-      n3b_knots_array_size[i][2] = 0;
+      n3b_coeff_array_size[i][0] = n3b_coeff_array_size[i][1] = n3b_coeff_array_size[i][2] = 0;
+      n3b_knots_array_size[i][0] = n3b_knots_array_size[i][1] = n3b_knots_array_size[i][2] = 0;
     }
 
   }
 }
 
-void UF3Potential::uf3_read_unified_pot_file(char *potf_name)
+void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
 {
   //Go through the entire file and get the sizes of knot vectors and
   //coeff vectors/matrices
@@ -999,7 +988,7 @@ void UF3Potential::create_bsplines()
             error->all(FLERR,
                        "UF3: In the current version the knot spacing type, "
                        "for all interactions needs to be same. For {}-{}-{} "
-                       "i.e. {}-{}-{} interaction expected{}, but found {}",
+                       "i.e. {}-{}-{} interaction expected {}, but found {}",
                        i, j, k, elements[map[i]], elements[map[j]], elements[map[k]], spacing_type,
                        knot_spacing_type_3b[i][j][k]);
         }

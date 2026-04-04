@@ -29,9 +29,13 @@ class UF3Potential : protected Pointers {
   int get_starting_index_3b(int i, int j, int k, double r, int knot_dim);
 
   int allocated;
+  void allocate();
 
-  int ***map_3b;
-  double **cut_2b, ***cut_3b, **cut_3b_list, ****min_cut_3b, ****n3b_coeff_array;
+  int **n2b_knots_array_size, **n2b_coeff_array_size;
+  double **cut_2b, ***n2b_knots_array, ***n2b_coeff_array;
+
+  int ***map_3b, **n3b_knots_array_size, **n3b_coeff_array_size;
+  double ***cut_3b, **cut_3b_list, ****min_cut_3b, ***n3b_knots_array, ****n3b_coeff_array;
   double ****cached_constants_2b, ****cached_constants_2b_deri;
   double ****cached_constants_3b, ****cached_constants_3b_deri;
   double ****coeff_for_der_jk, ****coeff_for_der_ik, ****coeff_for_der_ij;
@@ -46,18 +50,11 @@ class UF3Potential : protected Pointers {
   int ***setflag_3b, **knot_spacing_type_2b, ***knot_spacing_type_3b;
   double **knot_spacing_2b, ****knot_spacing_3b;
 
-  double ***n2b_knots_array, ***n2b_coeff_array;
-  int **n2b_knots_array_size, **n2b_coeff_array_size;
-
-  double ***n3b_knots_array;
-  int **n3b_knots_array_size, **n3b_coeff_array_size;
-
-  void uf3_read_unified_pot_file(char *potf_name);
+  void uf3_read_unified_pot_file(const std::string &potf_name);
   void communicate();
   int bsplines_created;
   bool pot_3b;
 
-  void allocate();
   void create_bsplines();
   void create_cached_constants_2b();
   void create_cached_constants_3b();

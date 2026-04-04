@@ -39,20 +39,7 @@ using MathConst::THIRD;
 
 /* ---------------------------------------------------------------------- */
 
-PairUF3::PairUF3(LAMMPS *lmp) : Pair(lmp), neighshort(nullptr)
-
-    /*
-    setflag_3b(nullptr), knot_spacing_type_2b(nullptr), knot_spacing_type_3b(nullptr),
-    cut(nullptr), cut_3b(nullptr), cut_3b_list(nullptr), min_cut_3b(nullptr),
-    knot_spacing_2b(nullptr), knot_spacing_3b(nullptr), n2b_knots_array(nullptr),
-    n2b_coeff_array(nullptr), n2b_knots_array_size(nullptr), n2b_coeff_array_size(nullptr),
-    cached_constants_2b(nullptr), cached_constants_2b_deri(nullptr), map_3b(nullptr),
-    n3b_knots_array(nullptr), n3b_coeff_array(nullptr), n3b_knots_array_size(nullptr),
-    n3b_coeff_array_size(nullptr), coeff_for_der_jk(nullptr), coeff_for_der_ik(nullptr),
-    coeff_for_der_ij(nullptr), cached_constants_3b(nullptr), cached_constants_3b_deri(nullptr),
-    get_starting_index_2b(nullptr), get_starting_index_3b(nullptr)
-    */
-
+PairUF3::PairUF3(LAMMPS *lmp) : Pair(lmp), uf3_potential(nullptr), neighshort(nullptr)
 {
   single_enable = 1;    // 1 if single() routine exists
   one_coeff = 1;        // 1 if allows only one coeff * * call
@@ -69,12 +56,12 @@ PairUF3::PairUF3(LAMMPS *lmp) : Pair(lmp), neighshort(nullptr)
 PairUF3::~PairUF3()
 {
   if (copymode) return;
-  delete uf3_potential;
   if (allocated) {
     memory->destroy(setflag);
     memory->destroy(cutsq);
     if (pot_3b) memory->destroy(neighshort);
   }
+  delete uf3_potential;
 }
 
 /* ----------------------------------------------------------------------
@@ -86,8 +73,8 @@ void PairUF3::settings(int narg, char **arg)
 
   if (narg != 1)
     error->all(FLERR,
-               "Invalid number of arguments for pair_style uf3"
-               "  Are you using a 2-body or 2 & 3-body UF potential?");
+               "Invalid number of arguments for pair_style uf3. "
+               "Are you using a 2-body or 2 & 3-body UF potential?");
   nbody_flag = utils::inumeric(FLERR, arg[0], true, lmp);
   if (nbody_flag == 2) {
     pot_3b = false;
@@ -105,15 +92,22 @@ void PairUF3::settings(int narg, char **arg)
 void PairUF3::coeff(int narg, char **arg)
 {
   if (narg != 3 + atom->ntypes) error->all(FLERR, "Invalid number of arguments uf3 in pair coeffs.");
+  uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements, map);
   if (!allocated) allocate();
   map_element2type(narg - 3, arg + 3, false);
-  uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements, map);
 }
+
+/* ---------------------------------------------------------------------- */
 
 void PairUF3::allocate()
 {
   allocated = 1;
+  const int np1 = atom->ntypes + 1;
+  map = new int[np1];    //No need to delete map as ~Pair deletes map
+  memory->create(setflag, np1, np1, "pair:setflag");
+  memory->create(cutsq, np1, np1, "pair:cutsq");
   if (pot_3b) memory->create(neighshort, maxshort, "pair:neighshort");
+  uf3_potential->allocate();
 }
 
 /* ----------------------------------------------------------------------
@@ -361,10 +355,10 @@ void PairUF3::compute(int eflag, int vflag)
             basis_ij[2] += rij_sq * cached_constants_3b[0][knot_start_index_ij - 1][6];
             basis_ij[2] += rij_th * cached_constants_3b[0][knot_start_index_ij - 1][7];
 
-            basis_ij[3] =           cached_constants_3b[0][knot_start_index_ij][0];
-            basis_ij[3] += rij    * cached_constants_3b[0][knot_start_index_ij][1];
-            basis_ij[3] += rij_sq * cached_constants_3b[0][knot_start_index_ij][2];
-            basis_ij[3] += rij_th * cached_constants_3b[0][knot_start_index_ij][3];
+            basis_ij[3] =           cached_constants_3b[0][knot_start_index_ij    ][0];
+            basis_ij[3] += rij    * cached_constants_3b[0][knot_start_index_ij    ][1];
+            basis_ij[3] += rij_sq * cached_constants_3b[0][knot_start_index_ij    ][2];
+            basis_ij[3] += rij_th * cached_constants_3b[0][knot_start_index_ij    ][3];
 
             //--------------basis_ik
             basis_ik[0] =           cached_constants_3b[1][knot_start_index_ik - 3][12];
@@ -382,10 +376,10 @@ void PairUF3::compute(int eflag, int vflag)
             basis_ik[2] += rik_sq * cached_constants_3b[1][knot_start_index_ik - 1][6];
             basis_ik[2] += rik_th * cached_constants_3b[1][knot_start_index_ik - 1][7];
 
-            basis_ik[3] =           cached_constants_3b[1][knot_start_index_ik][0];
-            basis_ik[3] += rik    * cached_constants_3b[1][knot_start_index_ik][1];
-            basis_ik[3] += rik_sq * cached_constants_3b[1][knot_start_index_ik][2];
-            basis_ik[3] += rik_th * cached_constants_3b[1][knot_start_index_ik][3];
+            basis_ik[3] =           cached_constants_3b[1][knot_start_index_ik    ][0];
+            basis_ik[3] += rik    * cached_constants_3b[1][knot_start_index_ik    ][1];
+            basis_ik[3] += rik_sq * cached_constants_3b[1][knot_start_index_ik    ][2];
+            basis_ik[3] += rik_th * cached_constants_3b[1][knot_start_index_ik    ][3];
 
             //--------------basis_jk
             basis_jk[0] =           cached_constants_3b[2][knot_start_index_jk - 3][12];
@@ -403,10 +397,10 @@ void PairUF3::compute(int eflag, int vflag)
             basis_jk[2] += rjk_sq * cached_constants_3b[2][knot_start_index_jk - 1][6];
             basis_jk[2] += rjk_th * cached_constants_3b[2][knot_start_index_jk - 1][7];
 
-            basis_jk[3] =           cached_constants_3b[2][knot_start_index_jk][0];
-            basis_jk[3] += rjk    * cached_constants_3b[2][knot_start_index_jk][1];
-            basis_jk[3] += rjk_sq * cached_constants_3b[2][knot_start_index_jk][2];
-            basis_jk[3] += rjk_th * cached_constants_3b[2][knot_start_index_jk][3];
+            basis_jk[3] =           cached_constants_3b[2][knot_start_index_jk    ][0];
+            basis_jk[3] += rjk    * cached_constants_3b[2][knot_start_index_jk    ][1];
+            basis_jk[3] += rjk_sq * cached_constants_3b[2][knot_start_index_jk    ][2];
+            basis_jk[3] += rjk_th * cached_constants_3b[2][knot_start_index_jk    ][3];
 
             //----------------basis_ij_der
             basis_ij_der[0] =           cached_constants_3b_deri[0][knot_start_index_ij - 3][6];
@@ -448,7 +442,6 @@ void PairUF3::compute(int eflag, int vflag)
             basis_jk_der[2] += rjk_sq * cached_constants_3b_deri[2][knot_start_index_jk - 1][2];
 
             double triangle_eval[4] = {0, 0, 0, 0};
-
             const int iknot_ij = knot_start_index_ij - 3;
             const int iknot_ik = knot_start_index_ik - 3;
             const int iknot_jk = knot_start_index_jk - 3;
@@ -458,13 +451,11 @@ void PairUF3::compute(int eflag, int vflag)
               for (int m = 0; m < 4; m++) {
                 const double factor = basis_ij_der_i * basis_ik[m];
                 double *slice = &(uf3_potential->coeff_for_der_ij[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                double tmp[4];
-                tmp[0] = slice[0] * basis_jk[0];
-                tmp[1] = slice[1] * basis_jk[1];
-                tmp[2] = slice[2] * basis_jk[2];
-                tmp[3] = slice[3] * basis_jk[3];
-                double sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
-                triangle_eval[1] += factor * sum;
+                const double tmp0 = slice[0] * basis_jk[0];
+                const double tmp1 = slice[1] * basis_jk[1];
+                const double tmp2 = slice[2] * basis_jk[2];
+                const double tmp3 = slice[3] * basis_jk[3];
+                triangle_eval[1] += factor * (tmp0 + tmp1 + tmp2 + tmp3);
               }
             }
 
@@ -473,13 +464,11 @@ void PairUF3::compute(int eflag, int vflag)
               for (int m = 0; m < 3; m++) {
                 const double factor = basis_ij_i * basis_ik_der[m];
                 double *slice = &(uf3_potential->coeff_for_der_ik[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                double tmp[4];
-                tmp[0] = slice[0] * basis_jk[0];
-                tmp[1] = slice[1] * basis_jk[1];
-                tmp[2] = slice[2] * basis_jk[2];
-                tmp[3] = slice[3] * basis_jk[3];
-                double sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
-                triangle_eval[2] += factor * sum;
+                const double tmp0 = slice[0] * basis_jk[0];
+                const double tmp1 = slice[1] * basis_jk[1];
+                const double tmp2 = slice[2] * basis_jk[2];
+                const double tmp3 = slice[3] * basis_jk[3];
+                triangle_eval[2] += factor * (tmp0 + tmp1 + tmp2 + tmp3);
               }
             }
 
@@ -488,12 +477,10 @@ void PairUF3::compute(int eflag, int vflag)
               for (int m = 0; m < 4; m++) {
                 const double factor = basis_ij_i * basis_ik[m];
                 double *slice = &(uf3_potential->coeff_for_der_jk[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                double tmp[3];
-                tmp[0] = slice[0] * basis_jk_der[0];
-                tmp[1] = slice[1] * basis_jk_der[1];
-                tmp[2] = slice[2] * basis_jk_der[2];
-                double sum = tmp[0] + tmp[1] + tmp[2];
-                triangle_eval[3] += factor * sum;
+                const double tmp0 = slice[0] * basis_jk_der[0];
+                const double tmp1 = slice[1] * basis_jk_der[1];
+                const double tmp2 = slice[2] * basis_jk_der[2];
+                triangle_eval[3] += factor * (tmp0 + tmp1 + tmp2);
               }
             }
 
@@ -546,16 +533,14 @@ void PairUF3::compute(int eflag, int vflag)
                   const double factor = basis_ij_i * basis_ik[m];
                   const double *slice =
                       &(uf3_potential->n3b_coeff_array[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                  double tmp[4];
-                  tmp[0] = slice[0] * basis_jk[0];
-                  tmp[1] = slice[1] * basis_jk[1];
-                  tmp[2] = slice[2] * basis_jk[2];
-                  tmp[3] = slice[3] * basis_jk[3];
-                  double sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
-                  triangle_eval[0] += factor * sum;
+                  const double tmp0 = slice[0] * basis_jk[0];
+                  const double tmp1 = slice[1] * basis_jk[1];
+                  const double tmp2 = slice[2] * basis_jk[2];
+                  const double tmp3 = slice[3] * basis_jk[3];
+                  triangle_eval[0] += factor * (tmp0 + tmp1 + tmp2 + tmp3);
                 }
               }
-              evdwl = *triangle_eval;
+              evdwl =* triangle_eval;
             }
 
             if (evflag) {
@@ -623,7 +608,7 @@ double PairUF3::single(int /*i*/, int /*j*/, int itype, int jtype, double rsq,
   double value = 0.0;
   const double r = sqrt(rsq);
 
-  if (r < cutsq[itype][jtype]) {
+  if (rsq < cutsq[itype][jtype]) {
     const int knot_start_index = uf3_potential->get_starting_index_2b(itype, jtype, r);
     double **cached_constants_2b = uf3_potential->cached_constants_2b[itype][jtype];
     double **cached_constants_2b_deri = uf3_potential->cached_constants_2b_deri[itype][jtype];
