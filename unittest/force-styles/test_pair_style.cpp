@@ -698,8 +698,10 @@ TEST(PairStyle, kokkos_omp)
 
     // relax error a bit for KOKKOS package
     double epsilon = 5.0 * test_config.epsilon;
-    // relax test precision when using pppm and single precision FFTs
+    // relax test precision when using single precision accumulation
+    if (Info::has_accelerator_feature("KOKKOS", "precision", "single")) epsilon = sqrt(epsilon);
 #if defined(FFT_SINGLE)
+    // relax test precision when using pppm and single precision FFTs
     if (lmp->force->kspace && lmp->force->kspace->compute_flag)
         if (utils::strmatch(lmp->force->kspace_style, "^pppm")) epsilon *= 2.0e8;
 #endif
