@@ -461,10 +461,8 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficien
         }
 
         for (int i = 0; i < coeff_dim1; i++) {
-          std::vector<std::vector<double>> dncoeff_vect2;
           for (int j = 0; j < coeff_dim2-1; j++) {
             double dntemp4 = 3 / (n3b_knots_array_nmo[1][j+4] - n3b_knots_array_nmo[1][j+1]);
-            std::vector<double> dncoeff_vect;
             for (int k = 0; k < coeff_dim3; k++) {
               d_dncoefficients_3b_view(map3b_view(n, m, o), 1, i, j, k) =
                   (n3b_coeff_array_nmo[i][j+1][k] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
@@ -502,7 +500,6 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficien
 
         auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
         auto n3b_knots_array_size_nmo = uf3_potential->n3b_knots_array_size[map_3b_nmo];
-        auto n3b_coeff_array_nmo = uf3_potential->n3b_coeff_array[map_3b_nmo];
         auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
 
         for (int l = 0; l < n3b_knots_array_size_nmo[2] - 4; l++) {
@@ -859,6 +856,7 @@ KOKKOS_INLINE_FUNCTION void PairUF3Kokkos<DeviceType>::operator()(TagPairUF3Comp
                                                                   const int &ii) const
 {
   const int i = d_ilist[ii];
+  const int itype = type[i];
   const KK_FLOAT xtmp = x(i, 0);
   const KK_FLOAT ytmp = x(i, 1);
   const KK_FLOAT ztmp = x(i, 2);
@@ -866,21 +864,13 @@ KOKKOS_INLINE_FUNCTION void PairUF3Kokkos<DeviceType>::operator()(TagPairUF3Comp
   const int jnum = d_numneigh[i];
   int inside = 0;
   for (int jj = 0; jj < jnum; jj++) {
-    int j = d_neighbors(i, jj);
-    j &= NEIGHMASK;
-
+    const int j = d_neighbors(i, jj) & NEIGHMASK;
+    const int jtype = type[j];
     const KK_FLOAT delx = xtmp - x(j, 0);
     const KK_FLOAT dely = ytmp - x(j, 1);
     const KK_FLOAT delz = ztmp - x(j, 2);
     const KK_FLOAT rsq = delx * delx + dely * dely + delz * delz;
-
-    const int itype = type[i];
-    const int jtype = type[j];
-
-    if (rsq <= d_cutsq(itype, jtype)) {
-      d_neighbors_short(i, inside) = j;
-      inside++;
-    }
+    if (rsq <= d_cutsq(itype, jtype)) d_neighbors_short(i, inside++) = j;
   }
   d_numneigh_short(i) = inside;
 }
@@ -922,8 +912,7 @@ PairUF3Kokkos<DeviceType>::operator()(TagPairUF3ComputeFullA<NEIGHFLAG, EVFLAG>,
   KK_ACC_FLOAT fztmpi = 0.0;
 
   for (int jj = 0; jj < jnum; jj++) {
-    int j = d_neighbors_short(i, jj);
-    j &= NEIGHMASK;
+    const int j = d_neighbors_short(i, jj) & NEIGHMASK;
     const int jtype = type[j];
 
     const KK_FLOAT delx = xtmp - x(j, 0);
