@@ -228,7 +228,7 @@ void PairUF3::compute(int eflag, int vflag)
           evdwl += rij * cached_constants_2b[knot_start_index - 3][13];
           evdwl += rsq * cached_constants_2b[knot_start_index - 3][14];
           evdwl += rth * cached_constants_2b[knot_start_index - 3][15];
-        };
+        }
 
         if (evflag) {
           ev_tally_xyz(i, j, nlocal, newton_pair, evdwl, 0.0, fx, fy, fz, delx, dely, delz);
