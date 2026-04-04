@@ -11,6 +11,7 @@
 ------------------------------------------------------------------------- */
 
 #include "compute_uf3.h"
+#include "uf3_potential.h"
 
 #include "atom.h"
 #include "comm.h"
@@ -27,70 +28,37 @@
 
 using namespace LAMMPS_NS;
 
-enum { SCALAR, VECTOR, ARRAY };
 ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
-    Compute(lmp, narg, arg), list(nullptr), pace(nullptr), paceall(nullptr),
+    Compute(lmp, narg, arg), list(nullptr), array_local(nullptr),
     c_pe(nullptr), c_virial(nullptr)
 {
   array_flag = 1;
   extarray = 0;
-  bikflag = 0;
-  dgradflag = 0;
+  virial_flag = 0;
 
-  const int ntypes = atom->ntypes;
-  const int nargmin = 4;
+  if (narg < 3) error->all(FLERR,"Illegal compute uf3 command");
+  const int nbody = utils::inumeric(FLERR, arg[0], true, lmp);
+  if (nbody == 2) pot_3b = false;
+  else if (nbody == 3) pot_3b = true;
+  else error->all(FLERR, "compute uf3 not (yet) implemented for {}-body terms", nbody);
 
-  if (narg < nargmin) error->all(FLERR,"Illegal compute pace command");
+  const int np1 = atom->ntypes + 1;
+  memory->create(setflag, np1, np1, "uf3:setflag");
+  memory->create(cutsq, np1, np1, "uf3:cutsq");
+  if (pot_3b) memory->create(neighshort, maxshort, "uf3:neighshort");
 
-  bikflag = utils::inumeric(FLERR, arg[4], false, lmp);
-  dgradflag = utils::inumeric(FLERR, arg[5], false, lmp);
-  if (dgradflag && !bikflag)
-    error->all(FLERR,"Illegal compute pace command: dgradflag=1 requires bikflag=1");
-
-  //read in file with CG coefficients or c_tilde coefficients
-  /*
-  auto potential_file_name = utils::get_potential_file_path(arg[3]);
-  acecimpl->basis_set = new ACECTildeBasisSet(potential_file_name);
-  cutmax = acecimpl->basis_set->cutoffmax;
-  delete acecimpl->ace;
-  acecimpl->ace = new ACECTildeEvaluator(*acecimpl->basis_set);
-  acecimpl->ace->compute_projections = true;
-  acecimpl->ace->compute_b_grad = true;
-  acecimpl->ace->element_type_mapping.init(ntypes+1);
-  for (int ik = 1; ik <= ntypes; ik++) {
-    for(int mu = 0; mu < acecimpl->basis_set->nelements; mu++){
-      if (mu == ik - 1) acecimpl->ace->element_type_mapping(ik) = mu;
-    }
-  }
-  */
+  std::vector<std::string> elements_(narg - 2);
+  for(int i=2; i<narg ; i++) elements_.push_back(arg[i]);
+  uf3_potential = new UF3Potential(lmp, arg[1], cutsq, setflag, elements_, pot_3b);
 
   // ACECTildeEvaluator::get_func_ind_shift() has a bug so instead lets do it manually here
   ncoeff = 0;
   number_of_functions = std::vector<int>(ntypes+1, 0);
   type_offsets = std::vector<int>(ntypes+1, 0);
 
-  /*
-  for( int i=1 ; i<=ntypes ; i++ ) {
-    type_offsets.at(i) = ncoeff;
-    const SPECIES_TYPE mu = acecimpl->ace->element_type_mapping(i);
-    number_of_functions.at(i) = acecimpl->basis_set->total_basis_size_rank1[mu];
-    number_of_functions.at(i) += acecimpl->basis_set->total_basis_size[mu];
-    ncoeff += number_of_functions.at(i);
-  }
-  */
-
-  ndims_force = 3;
-  ndims_virial = 6;
-  bik_rows = 1;
-  natoms = atom->natoms;
-  if (bikflag) bik_rows = natoms;
-  dgrad_rows = ndims_force*natoms;
-  size_array_rows = bik_rows + dgrad_rows + ndims_virial;
-  if (dgradflag) {
-    size_array_rows = bik_rows + 3*natoms*natoms + 1;
-    size_array_cols = ncoeff + 3;
-    if (comm->me == 0) error->warning(FLERR,"dgradflag=1 creates a N^2 array, beware of large systems.");
-  } else size_array_cols = ncoeff + 1;
+  if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
+  else size_array_rows = 1 + 3*(atom->natoms);
+  size_array_cols = ncoeff + 1;
   lastcol = size_array_cols-1;
 
 }
@@ -99,11 +67,12 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
 
 ComputeUF3::~ComputeUF3()
 {
-  if( modify->find_compute(id_virial) != -1 ) modify->delete_compute(id_virial);
-
-  //delete acecimpl;
-  memory->destroy(pace);
-  memory->destroy(paceall);
+  memory->destroy(setflag);
+  memory->destroy(cutsq);
+  if (pot_3b) memory->destroy(neighshort);
+  memory->destroy(array_local);
+  memory->destroy(array);
+  if( virial_flag && modify->find_compute(id_virial) != -1 ) modify->delete_compute(id_virial);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -111,31 +80,27 @@ ComputeUF3::~ComputeUF3()
 void ComputeUF3::init()
 {
   if (force->pair == nullptr)
-    error->all(FLERR,"Compute pace requires a pair style be defined");
-
-  if (cutmax > force->pair->cutforce)
-    error->all(FLERR,"Compute pace cutoff {} is longer than pairwise cutoff {}", cutmax, force->pair->cutforce);
+    error->all(FLERR,"Compute uf3 requires a pair style be defined");
 
   // need an occasional full neighbor list
   neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_OCCASIONAL);
 
-  if (modify->get_compute_by_style("pace").size() > 1 && comm->me == 0)
-    error->warning(FLERR,"More than one compute pace");
+  if (modify->get_compute_by_style("uf3").size() > 1 && comm->me == 0)
+    error->warning(FLERR,"More than one compute uf3");
 
   // allocate memory for global array
-  memory->create(pace,size_array_rows,size_array_cols, "pace:pace");
-  memory->create(paceall,size_array_rows,size_array_cols, "pace:paceall");
-  array = paceall;
+  memory->create(array_local,size_array_rows,size_array_cols, "uf3:array_local");
+  memory->create(array,size_array_rows,size_array_cols, "uf3:array");
 
   // find compute for reference energy
-
   c_pe = modify->get_compute_by_id("thermo_pe");
   if (!c_pe) error->all(FLERR,"Compute thermo_pe does not exist.");
 
   // add compute for reference virial tensor
-
-  id_virial = id + std::string("_press");
-  c_virial = modify->add_compute(id_virial + " all pressure NULL virial");
+  if (virial_flag) {
+    id_virial = id + std::string("_press");
+    c_virial = modify->add_compute(id_virial + " all pressure NULL virial");
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -153,12 +118,11 @@ void ComputeUF3::compute_array()
   invoked_array = update->ntimestep;
 
   // clear global array
-  for (int irow = 0; irow < size_array_rows; irow++){
-    for (int icoeff = 0; icoeff < size_array_cols; icoeff++) pace[irow][icoeff] = 0.0;
+  for (int irow = 0; irow < size_array_rows; irow++) {
+    for (int icoeff = 0; icoeff < size_array_cols; icoeff++) array_local[irow][icoeff] = 0.0;
   }
 
   // invoke full neighbor list (will copy or build if necessary)
-
   neighbor->build_one(list);
 
   const int inum = list->inum;
@@ -168,18 +132,7 @@ void ComputeUF3::compute_array()
   int * const type = atom->type;
   double **x = atom->x;
 
-  //determine the maximum number of neighbours
-  int max_jnum = -1;
-  int nei = 0;
-  int jtmp =0;
-  for (int iitmp = 0; iitmp < list->inum; iitmp++) {
-    int itmp = ilist[iitmp];
-    jtmp = numneigh[itmp];
-    nei = nei + jtmp;
-    if (jtmp > max_jnum) max_jnum = jtmp;
-  }
-
-  // compute pace derivatives for each atom in group
+  // compute uf3 derivatives for each atom in group
   // use full neighbor list to count atoms less than cutoff
 
   const int* const mask = atom->mask;
@@ -187,134 +140,146 @@ void ComputeUF3::compute_array()
 
   for (int ii = 0; ii < inum; ii++) {
     int irow = 0;
-    if (bikflag) irow = atom->tag[ilist[ii] & NEIGHMASK]-1;
     const int i = ilist[ii];
-    if (mask[i] & groupbit) {
-      const int itype = type[i];
-      const int* const jlist = firstneigh[i];
-      const int jnum = numneigh[i];
-      const int row_offset_i = bik_rows + 3*(atom->tag[i]-1);
-      const int type_offset = type_offsets.at(itype);
+    if (!(mask[i] & groupbit)) continue;
 
-      if (dgradflag) {
-        // dBi/dRi tags
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 0][0] = atom->tag[i]-1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 0][1] = atom->tag[i]-1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 0][2] = 0;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 1][0] = atom->tag[i]-1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 1][1] = atom->tag[i]-1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 1][2] = 1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 2][0] = atom->tag[i]-1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 2][1] = atom->tag[i]-1;
-        pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 2][2] = 2;
-        // dBi/dRj tags
-        for (int j=0; j<natoms; j++) {
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 0][0] = atom->tag[i]-1;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 0][1] = j;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 0][2] = 0;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 1][0] = atom->tag[i]-1;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 1][1] = j;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 1][2] = 1;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 2][0] = atom->tag[i]-1;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 2][1] = j;
-          pace[bik_rows + ((j)*3*natoms) + 3*(atom->tag[i]-1) + 2][2] = 2;
+    const int itype = type[i];
+    const int* const jlist = firstneigh[i];
+    const int jnum = numneigh[i];
+    const int row_offset_i = 1 + 3*(atom->tag[i]-1);
+    const int type_offset = type_offsets.at(itype);
+
+
+
+    for (int jj = 0; jj < jnum; jj++) {
+      const int j = jlist[jj];
+      const int row_offset_j = 1 + 3*(atom->tag[j]-1);
+
+      const double delx = x[i][0] - x[j][0];
+      const double dely = x[i][1] - x[j][1];
+      const double delz = x[i][2] - x[j][2];
+      const double rsq = delx*delx + dely*dely + delz*delz;
+      const double rij = sqrt(rsq);
+      const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
+
+
+      // Pseudocode for inside the i-j neighbor loop in compute_uf3.cpp
+      double b_val[4]; // Store b_m(rij) here
+      double b_der[4]; // Store db_m/drij here
+
+      // ... [Evaluate the 4 active unweighted B-splines based on rij] ...
+
+      for (int local_m = 0; local_m < 4; local_m++) {
+        const int func_ind = start_idx - 3 + local_m; // Map to global basis index
+        const int col = type_offset + func_ind;
+
+        // 1. Energy Feature
+        array_local[0][col] += 0.5 * b_val[local_m]; // 0.5 to avoid double counting if full neighbor list
+
+        // 2. Force Features
+        const double force_factor = -b_der[local_m] / rij;
+        const double fx_feature = delx * force_factor;
+        const double fy_feature = dely * force_factor;
+        const double fz_feature = delz * force_factor;
+
+        double **cached_constants_2b_deri = uf3_potential->cached_constants_2b_deri[itype][jtype];
+        double force_2b = cached_constants_2b_deri[knot_start_index - 1][0];
+        force_2b += rij * cached_constants_2b_deri[knot_start_index - 1][1];
+        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 1][2];
+        force_2b +=       cached_constants_2b_deri[knot_start_index - 2][3];
+        force_2b += rij * cached_constants_2b_deri[knot_start_index - 2][4];
+        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 2][5];
+        force_2b +=       cached_constants_2b_deri[knot_start_index - 3][6];
+        force_2b += rij * cached_constants_2b_deri[knot_start_index - 3][7];
+        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 3][8];
+
+        const double fpair = -1 * force_2b / rij;
+        const double fx = delx * fpair;
+        const double fy = dely * fpair;
+        const double fz = delz * fpair;
+        
+        array_local[row_offset_i    ][col] += fx_feature;
+        array_local[row_offset_i + 1][col] += fy_feature;
+        array_local[row_offset_i + 2][col] += fz_feature;
+    
+        array_local[row_offset_j    ][col] -= fx_feature;
+        array_local[row_offset_j + 1][col] -= fy_feature;
+        array_local[row_offset_j + 2][col] -= fz_feature;
+
+        // 3. Virial Features (if requested)
+        if (virial_flag) {
+          array_local[size_array_rows-6][col] += delx * fx_feature; // W_xx
+          array_local[size_array_rows-5][col] += dely * fy_feature; // W_yy
+          array_local[size_array_rows-4][col] += delz * fz_feature; // W_zz
+          array_local[size_array_rows-3][col] += delz * fy_feature; // W_zy
+          array_local[size_array_rows-2][col] += delz * fx_feature; // W_zx
+          array_local[size_array_rows-1][col] += dely * fx_feature; // W_yx
         }
       }
 
-      // resize the neighbor cache after setting the basis
-      //acecimpl->ace->resize_neighbours_cache(max_jnum);
-      //acecimpl->ace->compute_atom(i, atom->x, atom->type, list->numneigh[i], list->firstneigh[i]);
-      //Array1D<DOUBLE_TYPE> Bs = acecimpl->ace->projections;
 
-      for (int jj = 0; jj < jnum; jj++) {
-        const int j = jlist[jj];
-        const int row_offset_j = bik_rows + 3*(atom->tag[j]-1);
-        for (int func_ind=0; func_ind < number_of_functions.at(itype); func_ind++){
-          double fx_dB = 0; //acecimpl->ace->neighbours_dB(func_ind,jj,0);
-          double fy_dB = 0; //acecimpl->ace->neighbours_dB(func_ind,jj,1);
-          double fz_dB = 0; //acecimpl->ace->neighbours_dB(func_ind,jj,2);
-          if (!dgradflag) {
-            // forces
-            pace[row_offset_i    ][type_offset + func_ind] += fx_dB;
-            pace[row_offset_i + 1][type_offset + func_ind] += fy_dB;
-            pace[row_offset_i + 2][type_offset + func_ind] += fz_dB;
-            pace[row_offset_j    ][type_offset + func_ind] -= fx_dB;
-            pace[row_offset_j + 1][type_offset + func_ind] -= fy_dB;
-            pace[row_offset_j + 2][type_offset + func_ind] -= fz_dB;
-            // virial
-            pace[size_array_rows-6][type_offset + func_ind] += (fx_dB*x[i][0] - fx_dB*x[j][0]);
-            pace[size_array_rows-5][type_offset + func_ind] += (fy_dB*x[i][1] - fy_dB*x[j][1]);
-            pace[size_array_rows-4][type_offset + func_ind] += (fz_dB*x[i][2] - fz_dB*x[j][2]);
-            pace[size_array_rows-3][type_offset + func_ind] += (fz_dB*x[i][1] - fz_dB*x[j][1]);
-            pace[size_array_rows-2][type_offset + func_ind] += (fz_dB*x[i][0] - fz_dB*x[j][0]);
-            pace[size_array_rows-1][type_offset + func_ind] += (fy_dB*x[i][0] - fy_dB*x[j][0]);
-          } else {
-              const int column_offset = 3 + type_offset + func_ind;
-              // dBi/dRj
-              pace[bik_rows + ((atom->tag[j]-1)*3*natoms) + 3*(atom->tag[i]-1) + 0][column_offset] -= fx_dB;
-              pace[bik_rows + ((atom->tag[j]-1)*3*natoms) + 3*(atom->tag[i]-1) + 1][column_offset] -= fy_dB;
-              pace[bik_rows + ((atom->tag[j]-1)*3*natoms) + 3*(atom->tag[i]-1) + 2][column_offset] -= fz_dB;
-              // dBi/dRi
-              pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 0][column_offset] += fx_dB;
-              pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 1][column_offset] += fy_dB;
-              pace[bik_rows + ((atom->tag[i]-1)*3*natoms) + 3*(atom->tag[i]-1) + 2][column_offset] += fz_dB;
-          }
+
+        f[i][0] += fx;
+        f[i][1] += fy;
+        f[i][2] += fz;
+        f[j][0] -= fx;
+        f[j][1] -= fy;
+        f[j][2] -= fz;
+
+
+
+        // forces
+        array_local[row_offset_i    ][type_offset + func_ind] += fx_dB;
+        array_local[row_offset_i + 1][type_offset + func_ind] += fy_dB;
+        array_local[row_offset_i + 2][type_offset + func_ind] += fz_dB;
+        array_local[row_offset_j    ][type_offset + func_ind] -= fx_dB;
+        array_local[row_offset_j + 1][type_offset + func_ind] -= fy_dB;
+        array_local[row_offset_j + 2][type_offset + func_ind] -= fz_dB;
+
+        // virial
+        if (virial_flag) {
+          array_local[size_array_rows-6][type_offset + func_ind] += (fx_dB*x[i][0] - fx_dB*x[j][0]);
+          array_local[size_array_rows-5][type_offset + func_ind] += (fy_dB*x[i][1] - fy_dB*x[j][1]);
+          array_local[size_array_rows-4][type_offset + func_ind] += (fz_dB*x[i][2] - fz_dB*x[j][2]);
+          array_local[size_array_rows-3][type_offset + func_ind] += (fz_dB*x[i][1] - fz_dB*x[j][1]);
+          array_local[size_array_rows-2][type_offset + func_ind] += (fz_dB*x[i][0] - fz_dB*x[j][0]);
+          array_local[size_array_rows-1][type_offset + func_ind] += (fy_dB*x[i][0] - fy_dB*x[j][0]);
         }
-      } // loop over jj inside
-      for (int func_ind=0; func_ind < number_of_functions.at(itype); func_ind++) {
-        pace[irow][type_offset+func_ind] += 0; //Bs(func_ind);
       }
-    } //group bit
+    } // loop over jj inside
+    for (int func_ind=0; func_ind < number_of_functions.at(itype); func_ind++) {
+      array_local[irow][type_offset+func_ind] += 0; //Bs(func_ind);
+    }
   } // for ii loop
 
-  if (!dgradflag) {
-    // accumulate forces to global array
-    for (int i = 0; i < atom->nlocal; i++) {
-      int iglobal = atom->tag[i];
-      int irow = 3*(iglobal-1)+1;
-      pace[irow++][lastcol] = atom->f[i][0];
-      pace[irow++][lastcol] = atom->f[i][1];
-      pace[irow][lastcol] = atom->f[i][2];
-    }
-  } else {
-    // for dgradflag=1, put forces at first 3 columns of bik rows
-    for (int i=0; i<atom->nlocal; i++) {
-      int iglobal = atom->tag[i];
-      pace[iglobal-1][0] = atom->f[i][0];
-      pace[iglobal-1][1] = atom->f[i][1];
-      pace[iglobal-1][2] = atom->f[i][2];
-    }
+
+  // accumulate forces to global array
+  for (int i = 0; i < atom->nlocal; i++) {
+    int iglobal = atom->tag[i];
+    int irow = 3*(iglobal-1)+1;
+    array_local[irow++][lastcol] = atom->f[i][0];
+    array_local[irow++][lastcol] = atom->f[i][1];
+    array_local[irow][lastcol] = atom->f[i][2];
   }
 
   // sum up over all processes
-  MPI_Allreduce(&pace[0][0],&paceall[0][0],size_array_rows*size_array_cols,MPI_DOUBLE,MPI_SUM,world);
+  MPI_Allreduce(&array_local[0][0],&array[0][0],size_array_rows*size_array_cols,MPI_DOUBLE,MPI_SUM,world);
 
   // assign energy to last column
-  if (!dgradflag) {
-    for (int i = 0; i < bik_rows; i++) paceall[i][lastcol] = 0;
-    int irow = 0;
-    double reference_energy = c_pe->compute_scalar();
-    paceall[irow][lastcol] = reference_energy;
-  } else {
-    // assign reference energy right after the dgrad rows, first column
-    int irow = bik_rows + 3*natoms*natoms;
-    double reference_energy = c_pe->compute_scalar();
-    paceall[irow][0] = reference_energy;
-  }
+  array[0][lastcol] = c_pe->compute_scalar();
 
   // assign virial stress to last column
   // switch to Voigt notation
-  if (!dgradflag) {
+  if (virial_flag) {
     c_virial->compute_vector();
-    int irow = 3*natoms+bik_rows;
-    paceall[irow++][lastcol] = c_virial->vector[0];
-    paceall[irow++][lastcol] = c_virial->vector[1];
-    paceall[irow++][lastcol] = c_virial->vector[2];
-    paceall[irow++][lastcol] = c_virial->vector[5];
-    paceall[irow++][lastcol] = c_virial->vector[4];
-    paceall[irow++][lastcol] = c_virial->vector[3];
+    int irow = 1 + 3*(atom->natoms);
+    array[irow++][lastcol] = c_virial->vector[0];
+    array[irow++][lastcol] = c_virial->vector[1];
+    array[irow++][lastcol] = c_virial->vector[2];
+    array[irow++][lastcol] = c_virial->vector[5];
+    array[irow++][lastcol] = c_virial->vector[4];
+    array[irow++][lastcol] = c_virial->vector[3];
   }
-
 }
 
 /* ----------------------------------------------------------------------
@@ -323,8 +288,7 @@ void ComputeUF3::compute_array()
 
 double ComputeUF3::memory_usage()
 {
-  double bytes = (double)size_array_rows*size_array_cols*sizeof(double); // pace
-  bytes += (double)size_array_rows*size_array_cols*sizeof(double);       // paceall
+  double bytes = (double)size_array_rows*size_array_cols*sizeof(double)*2; // uf3 and uf3_all
   return bytes;
 }
 

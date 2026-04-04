@@ -34,10 +34,17 @@ class ComputeUF3 : public Compute {
   double memory_usage() override;
 
  private:
-  int natoms, lastcol, ncoeff, ndims_force, ndims_virial;
-  int bikflag, bik_rows, dgradflag, dgrad_rows;
-  double cutmax, **pace, **paceall;
+
   class NeighList *list;
+  class UF3Potential *uf3_potential;
+  int *neighshort, maxshort;    // short neighbor list array for 3body interaction
+
+  double **cutsq;     // cutoff sq for each atom pair
+  int **setflag;      // 0/1 = whether each i,j has been set
+
+  bool pot_3b;
+  int lastcol, ncoeff, virial_flag;
+  double **array_local;
 
   Compute *c_pe, *c_virial;
   std::string id_virial;
@@ -47,5 +54,5 @@ class ComputeUF3 : public Compute {
 
 }    // namespace LAMMPS_NS
 
-#endif
+#endif // !LMP_COMPUTE_UF3_H
 #endif
