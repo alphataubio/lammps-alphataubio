@@ -90,6 +90,8 @@ void PairUF3::settings(int narg, char **arg)
  * ---------------------------------------------------------------------- */
 void PairUF3::coeff(int narg, char **arg)
 {
+  if (narg != 3 + atom->ntypes)
+    error->all(FLERR, "Invalid number of arguments uf3 in pair coeffs.");
   if (!allocated) allocate();
   map_element2type(narg - 3, arg + 3, false);
   uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements, map, pot_3b);
@@ -162,9 +164,8 @@ void PairUF3::compute(int eflag, int vflag)
     const double ztmp = x[i][2];
     const int itype = type[i];
     int *jlist = firstneigh[i];
-    int jnum = numneigh[i];
     int numshort = 0;
-    for (int jj = 0; jj < jnum; jj++) {
+    for (int jj = 0; jj < numneigh[i]; jj++) {
       const int j = jlist[jj] & NEIGHMASK;
       const double delx = xtmp - x[j][0];
       const double dely = ytmp - x[j][1];
@@ -270,8 +271,8 @@ void PairUF3::compute(int eflag, int vflag)
 
     // 3-body interaction
     // jth atom
-    jnum = numshort - 1;
-    for (int jj = 0; jj < jnum; jj++) {
+
+    for (int jj = 0; jj < numshort - 1; jj++) {
 
       double del_rji[3], del_rki[3], del_rkj[3];
 
