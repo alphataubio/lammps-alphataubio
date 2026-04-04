@@ -239,7 +239,7 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_2b_coefficien
 
   // Count max knots for array size
 
-  int max_knots = max_num_knots_2b;
+  const int max_knots = uf3_potential->max_num_knots_2b;
 
   // Copy coefficients to view
 
@@ -248,7 +248,7 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_2b_coefficien
 
   for (int i = 1; i < num_of_elements + 1; i++) {
     for (int j = i; j < num_of_elements + 1; j++) {
-      for (int k = 0; k < max_num_coeff_2b; k++)
+      for (int k = 0; k < uf3_potential->max_num_coeff_2b; k++)
         d_coefficients_2b_view(map2b_view(i, j), k) = uf3_potential->n2b_coeff_array[i][j][k];
     }
   }
@@ -264,7 +264,7 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_2b_coefficien
   for (int i = 1; i < num_of_elements + 1; i++) {
     for (int j = i; j < num_of_elements + 1; j++) {
       double *n2b_knots_array_ij = uf3_potential->n2b_knots_array[i][j];
-      for (int k = 0; k < max_num_knots_2b; k++)
+      for (int k = 0; k < uf3_potential->max_num_knots_2b; k++)
         d_n2b_knot_view(map2b_view(i, j), k) = n2b_knots_array_ij[k];
       d_n2b_knot_spacings_view(map2b_view(i, j)) = n2b_knots_array_ij[4] - n2b_knots_array_ij[3];
     }
@@ -332,7 +332,7 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficien
 
   // Count max knots for view
 
-  int max_knots = max_num_knots_3b;
+  const int max_knots = uf3_potential->max_num_knots_3b;
   //In n3b_knot_matrix[i][j][k],
   //n3b_knot_matrix[i][j][k][0] is the knot_vector along jk,
   //n3b_knot_matrix[i][j][k][1] is the knot_vector along ik,
@@ -445,43 +445,39 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficien
         auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
         auto n3b_coeff_array_size_nmo = uf3_potential->n3b_coeff_array_size[map_3b_nmo];
         auto n3b_coeff_array_nmo = uf3_potential->n3b_coeff_array[map_3b_nmo];
+        auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
+        const int coeff_dim1 = n3b_coeff_array_size_nmo[0];
+        const int coeff_dim2 = n3b_coeff_array_size_nmo[1];
+        const int coeff_dim3 = n3b_coeff_array_size_nmo[2];
 
-        int coeff_dim1 = n3b_coeff_array_size_nmo[0];
-        int coeff_dim2 = n3b_coeff_array_size_nmo[1];
-        int coeff_dim3 = n3b_coeff_array_size_nmo[2];
         for (int i = 0; i < coeff_dim1; i++) {
           for (int j = 0; j < coeff_dim2; j++) {
-            for (int k = 0; k < coeff_dim3; k++) {
-              double dntemp4 =
-                  3 / (n3b_knots_array[map_3b[n][m][o]][0][k + 4] - n3b_knots_array[map_3b[n][m][o]][0][k + 1]);
-
+            for (int k = 0; k < coeff_dim3-1; k++) {
+              double dntemp4 = 3 / (n3b_knots_array_nmo[0][k+4] - n3b_knots_array_nmo[0][k+1]);
               d_dncoefficients_3b_view(map3b_view(n, m, o), 2, i, j, k) =
-                  (n3b_coeff_array[map_3b[n][m][o]][i][j][k + 1] - n3b_coeff_array[map_3b[n][m][o]][i][j][k]) * dntemp4;
+                  (n3b_coeff_array_nmo[i][j][k+1] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
             }
           }
         }
 
         for (int i = 0; i < coeff_dim1; i++) {
           std::vector<std::vector<double>> dncoeff_vect2;
-          for (int j = 0; j < coeff_dim2; j++) {
-            double dntemp4 =
-                3 / (n3b_knots_array[map_3b[n][m][o]][1][j + 4] - n3b_knots_array[map_3b[n][m][o]][1][j + 1]);
-
+          for (int j = 0; j < coeff_dim2-1; j++) {
+            double dntemp4 = 3 / (n3b_knots_array_nmo[1][j+4] - n3b_knots_array_nmo[1][j+1]);
             std::vector<double> dncoeff_vect;
             for (int k = 0; k < coeff_dim3; k++) {
               d_dncoefficients_3b_view(map3b_view(n, m, o), 1, i, j, k) =
-                  (n3b_coeff_array[map_3b[n][m][o]][i][j + 1][k] - n3b_coeff_array[map_3b[n][m][o]][i][j][k]) * dntemp4;
+                  (n3b_coeff_array_nmo[i][j+1][k] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
             }
           }
         }
 
-        for (int i = 0; i < coeff_dim1; i++) {
-          double dntemp4 =
-              3 / (n3b_knots_array[map_3b[n][m][o]][2][i + 4] - n3b_knots_array[map_3b[n][m][o]][2][i + 1]);
+        for (int i = 0; i < coeff_dim1-1; i++) {
+          double dntemp4 = 3 / (n3b_knots_array_nmo[2][i+4] - n3b_knots_array_nmo[2][i+1]);
           for (int j = 0; j < coeff_dim2; j++) {
             for (int k = 0; k < coeff_dim3; k++) {
               d_dncoefficients_3b_view(map3b_view(n, m, o), 0, i, j, k) =
-                  (n3b_coeff_array[map_3b[n][m][o]][i + 1][j][k] - n3b_coeff_array[map_3b[n][m][o]][i][j][k]) * dntemp4;
+                  (n3b_coeff_array_nmo[i+1][j][k] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
             }
           }
         }
@@ -503,20 +499,26 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficien
   for (int n = 1; n < num_of_elements + 1; n++) {
     for (int m = 1; m < num_of_elements + 1; m++) {
       for (int o = 1; o < num_of_elements + 1; o++) {
-        for (int l = 0; l < n3b_knots_array_size[map_3b[n][m][o]][2] - 4; l++) {
-          auto c = get_constants(&n3b_knots_array[map_3b[n][m][o]][2][l], 1);
+
+        auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
+        auto n3b_knots_array_size_nmo = uf3_potential->n3b_knots_array_size[map_3b_nmo];
+        auto n3b_coeff_array_nmo = uf3_potential->n3b_coeff_array[map_3b_nmo];
+        auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
+
+        for (int l = 0; l < n3b_knots_array_size_nmo[2] - 4; l++) {
+          auto c = get_constants(&n3b_knots_array_nmo[2][l], 1);
           for (int k = 0; k < 16; k++)
             constants_3b_view(map3b_view(n, m, o), 0, l, k) =
                 (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
         }
-        for (int l = 0; l < n3b_knots_array_size[map_3b[n][m][o]][1] - 4; l++) {
-          auto c = get_constants(&n3b_knots_array[map_3b[n][m][o]][1][l], 1);
+        for (int l = 0; l < n3b_knots_array_size_nmo[1] - 4; l++) {
+          auto c = get_constants(&n3b_knots_array_nmo[1][l], 1);
           for (int k = 0; k < 16; k++)
             constants_3b_view(map3b_view(n, m, o), 1, l, k) =
                 (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
         }
-        for (int l = 0; l < n3b_knots_array_size[map_3b[n][m][o]][0] -4; l++) {
-          auto c = get_constants(&n3b_knots_array[map_3b[n][m][o]][0][l], 1);
+        for (int l = 0; l < n3b_knots_array_size_nmo[0] -4; l++) {
+          auto c = get_constants(&n3b_knots_array_nmo[0][l], 1);
           for (int k = 0; k < 16; k++)
             constants_3b_view(map3b_view(n, m, o), 2, l, k) =
                 (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
@@ -532,20 +534,25 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficien
   for (int n = 1; n < num_of_elements + 1; n++) {
     for (int m = 1; m < num_of_elements + 1; m++) {
       for (int o = 1; o < num_of_elements + 1; o++) {
-        for (int l = 1; l < n3b_knots_array_size[map_3b[n][m][o]][2] - 5; l++) {
-          auto c = get_dnconstants(&n3b_knots_array[map_3b[n][m][o]][2][l], 1);
+
+        auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
+        auto n3b_knots_array_size_nmo = uf3_potential->n3b_knots_array_size[map_3b_nmo];
+        auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
+
+        for (int l = 1; l < n3b_knots_array_size_nmo[2] - 5; l++) {
+          auto c = get_dnconstants(&n3b_knots_array_nmo[2][l], 1);
           for (int k = 0; k < 9; k++)
             dnconstants_3b_view(map3b_view(n, m, o), 0, l - 1, k) =
                 (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
         }
-        for (int l = 1; l < n3b_knots_array_size[map_3b[n][m][o]][1] - 5; l++) {
-          auto c = get_dnconstants(&n3b_knots_array[map_3b[n][m][o]][1][l], 1);
+        for (int l = 1; l < n3b_knots_array_size_nmo[1] - 5; l++) {
+          auto c = get_dnconstants(&n3b_knots_array_nmo[1][l], 1);
           for (int k = 0; k < 9; k++)
             dnconstants_3b_view(map3b_view(n, m, o), 1, l - 1, k) =
                 (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
         }
-        for (int l = 1; l < n3b_knots_array_size[map_3b[n][m][o]][0] - 5; l++) {
-          auto c = get_dnconstants(&n3b_knots_array[map_3b[n][m][o]][0][l], 1);
+        for (int l = 1; l < n3b_knots_array_size_nmo[0] - 5; l++) {
+          auto c = get_dnconstants(&n3b_knots_array_nmo[0][l], 1);
           for (int k = 0; k < 9; k++)
             dnconstants_3b_view(map3b_view(n, m, o), 2, l - 1, k) =
                 (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
