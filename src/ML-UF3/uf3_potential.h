@@ -20,7 +20,7 @@ namespace LAMMPS_NS {
 
 class UF3Potential : protected Pointers {
  public:
-  UF3Potential(class LAMMPS *, const std::string &, double **cutsq_, int **, char **, int *, bool);
+  UF3Potential(class LAMMPS *, const std::string &, double **cutsq_, int **, std::vector<std::string> &, bool);
   ~UF3Potential() override;
 
   double memory_usage();
@@ -46,8 +46,9 @@ class UF3Potential : protected Pointers {
 
   double **cutsq;     // cutoff sq for each atom pair
   int **setflag;      // 0/1 = whether each i,j has been set
-  char **elements;      // names of unique elements
-  int *map;             // mapping from atom types to elements
+
+  std::vector<std::string> elements;
+  std::unordered_map<std::string, int> element_to_type;
 
   int ***setflag_3b, **knot_spacing_type_2b, ***knot_spacing_type_3b;
   double **knot_spacing_2b, ****knot_spacing_3b;

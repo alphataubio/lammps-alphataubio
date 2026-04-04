@@ -19,6 +19,7 @@
 ---------------------------------------------------------------------- */
 
 #include "pair_uf3.h"
+#include "uf3_potential.h"
 
 #include "atom.h"
 #include "comm.h"
@@ -28,8 +29,6 @@
 #include "memory.h"
 #include "neigh_list.h"
 #include "neighbor.h"
-
-#include "uf3_potential.h"
 
 #include <algorithm>
 #include <cmath>
@@ -93,8 +92,9 @@ void PairUF3::coeff(int narg, char **arg)
   if (narg != 3 + atom->ntypes)
     error->all(FLERR, "Invalid number of arguments uf3 in pair coeffs.");
   if (!allocated) allocate();
-  map_element2type(narg - 3, arg + 3, false);
-  uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements, map, pot_3b);
+  std::vector<std::string> elements_(narg - 3);
+  for(int i=3; i<narg ; i++) elements_.push_back(arg[i]);
+  uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements_, pot_3b);
 }
 
 /* ---------------------------------------------------------------------- */
