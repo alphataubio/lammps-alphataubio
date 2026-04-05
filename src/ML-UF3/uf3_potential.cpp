@@ -289,14 +289,8 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
             //Trailing and leading trim check
             int leading_trim = fp2nd_line.next_int();
             int trailing_trim = fp2nd_line.next_int();
-            if (leading_trim != 0)
-              error->all(FLERR,
-                         "UF3: Current implementation is throughly tested "
-                         "only for leading_trim=0");
-            if (trailing_trim != 3)
-              error->all(FLERR,
-                         "UF3: Current implementation is throughly tested "
-                         "only for trailing_trim=3");
+            if (leading_trim != 0) error->all(FLERR, "UF3 implemented only for leading_trim=0");
+            if (trailing_trim != 3) error->all(FLERR, "UF3 implemented only for trailing_trim=3");
 
             //read next line, should contain cutoffs and size of knot vectors
             temp_line = txtfilereader.next_line(6);
@@ -407,7 +401,7 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
                potf_name);
 
   memory->destroy(n2b_coeff_array);
-  memory->create(n2b_coeff_array, np1, np1, np1, "uf3:n2b_coeff_array");
+  memory->create(n2b_coeff_array, np1, np1, max_num_coeff_2b, "uf3:n2b_coeff_array");
 
   if (pot_3b) {
     if (max_num_knots_3b <= 0)
