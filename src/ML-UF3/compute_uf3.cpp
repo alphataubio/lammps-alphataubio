@@ -37,7 +37,7 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   virial_flag = 0;
 
   if (narg < 3) error->all(FLERR,"Illegal compute uf3 command");
-  const int nbody = utils::inumeric(FLERR, arg[0], true, lmp);
+  const int nbody = utils::inumeric(FLERR, arg[3], true, lmp);
   if (nbody == 2) pot_3b = false;
   else if (nbody == 3) pot_3b = true;
   else error->all(FLERR, "compute uf3 not (yet) implemented for {}-body terms", nbody);
@@ -113,8 +113,8 @@ void ComputeUF3::compute_array()
   invoked_array = update->ntimestep;
 
   // clear global array
-  for (int irow = 0; irow < size_array_rows; irow++) {
-    for (int icoeff = 0; icoeff < size_array_cols; icoeff++) array_local[irow][icoeff] = 0.0;
+  for (int i = 0; i < size_array_rows; i++) {
+    for (int j = 0; j < size_array_cols; j++) array_local[i][j] = 0.0;
   }
 
   // invoke full neighbor list (will copy or build if necessary)
@@ -148,14 +148,79 @@ void ComputeUF3::compute_array()
 
     for (int jj = 0; jj < jnum; jj++) {
       const int j = jlist[jj];
+      const int jtype = type[j];
       const int row_offset_j = 1 + 3*(atom->tag[j]-1);
 
       const double delx = x[i][0] - x[j][0];
       const double dely = x[i][1] - x[j][1];
       const double delz = x[i][2] - x[j][2];
       const double rsq = delx*delx + dely*dely + delz*delz;
+
+      if (rsq < cutsq[itype][jtype]) continue;
+
       const double rij = sqrt(rsq);
       const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
+
+      // ENERGY
+      const double rth = rsq * rij;
+      double **cached_constants_2b = uf3_potential->cached_constants_2b[itype][jtype];
+      double evdwl =        cached_constants_2b[start_idx    ][0];
+        evdwl += rij * cached_constants_2b[start_idx    ][1];
+        evdwl += rsq * cached_constants_2b[start_idx    ][2];
+        evdwl += rth * cached_constants_2b[start_idx    ][3];
+        evdwl +=       cached_constants_2b[start_idx - 1][4];
+        evdwl += rij * cached_constants_2b[start_idx - 1][5];
+        evdwl += rsq * cached_constants_2b[start_idx - 1][6];
+        evdwl += rth * cached_constants_2b[start_idx - 1][7];
+        evdwl +=       cached_constants_2b[start_idx - 2][8];
+        evdwl += rij * cached_constants_2b[start_idx - 2][9];
+        evdwl += rsq * cached_constants_2b[start_idx - 2][10];
+        evdwl += rth * cached_constants_2b[start_idx - 2][11];
+        evdwl +=       cached_constants_2b[start_idx - 3][12];
+        evdwl += rij * cached_constants_2b[start_idx - 3][13];
+        evdwl += rsq * cached_constants_2b[start_idx - 3][14];
+        evdwl += rth * cached_constants_2b[start_idx - 3][15];
+
+
+      // FORCES
+      double **cached_constants_2b_deri = uf3_potential->cached_constants_2b_deri[itype][jtype];
+      double force_2b = cached_constants_2b_deri[start_idx - 1][0];
+      force_2b += rij * cached_constants_2b_deri[start_idx - 1][1];
+      force_2b += rsq * cached_constants_2b_deri[start_idx - 1][2];
+      force_2b +=       cached_constants_2b_deri[start_idx - 2][3];
+      force_2b += rij * cached_constants_2b_deri[start_idx - 2][4];
+      force_2b += rsq * cached_constants_2b_deri[start_idx - 2][5];
+      force_2b +=       cached_constants_2b_deri[start_idx - 3][6];
+      force_2b += rij * cached_constants_2b_deri[start_idx - 3][7];
+      force_2b += rsq * cached_constants_2b_deri[start_idx - 3][8];
+
+        const double fpair = -1 * force_2b / rij;
+        const double fx = delx * fpair;
+        const double fy = dely * fpair;
+        const double fz = delz * fpair;
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+
+
+        f[i][0] += fx;
+        f[i][1] += fy;
+        f[i][2] += fz;
+        f[j][0] -= fx;
+        f[j][1] -= fy;
+        f[j][2] -= fz;
+
 
 
       // Pseudocode for inside the i-j neighbor loop in compute_uf3.cpp
@@ -201,6 +266,8 @@ void ComputeUF3::compute_array()
         array_local[row_offset_j + 1][col] -= fy_feature;
         array_local[row_offset_j + 2][col] -= fz_feature;
 
+
+
         // 3. Virial Features (if requested)
         if (virial_flag) {
           array_local[size_array_rows-6][col] += delx * fx_feature; // W_xx
@@ -210,43 +277,11 @@ void ComputeUF3::compute_array()
           array_local[size_array_rows-2][col] += delz * fx_feature; // W_zx
           array_local[size_array_rows-1][col] += dely * fx_feature; // W_yx
         }
-      }
 
+        */
 
-
-        f[i][0] += fx;
-        f[i][1] += fy;
-        f[i][2] += fz;
-        f[j][0] -= fx;
-        f[j][1] -= fy;
-        f[j][2] -= fz;
-
-
-
-        // forces
-        array_local[row_offset_i    ][type_offset + func_ind] += fx_dB;
-        array_local[row_offset_i + 1][type_offset + func_ind] += fy_dB;
-        array_local[row_offset_i + 2][type_offset + func_ind] += fz_dB;
-        array_local[row_offset_j    ][type_offset + func_ind] -= fx_dB;
-        array_local[row_offset_j + 1][type_offset + func_ind] -= fy_dB;
-        array_local[row_offset_j + 2][type_offset + func_ind] -= fz_dB;
-
-        // virial
-        if (virial_flag) {
-          array_local[size_array_rows-6][type_offset + func_ind] += (fx_dB*x[i][0] - fx_dB*x[j][0]);
-          array_local[size_array_rows-5][type_offset + func_ind] += (fy_dB*x[i][1] - fy_dB*x[j][1]);
-          array_local[size_array_rows-4][type_offset + func_ind] += (fz_dB*x[i][2] - fz_dB*x[j][2]);
-          array_local[size_array_rows-3][type_offset + func_ind] += (fz_dB*x[i][1] - fz_dB*x[j][1]);
-          array_local[size_array_rows-2][type_offset + func_ind] += (fz_dB*x[i][0] - fz_dB*x[j][0]);
-          array_local[size_array_rows-1][type_offset + func_ind] += (fy_dB*x[i][0] - fy_dB*x[j][0]);
-        }
-      }
     } // loop over jj inside
-    for (int func_ind=0; func_ind < number_of_functions.at(itype); func_ind++) {
-      array_local[irow][type_offset+func_ind] += 0; //Bs(func_ind);
-    }
   } // for ii loop
-
 
   // accumulate forces to global array
   for (int i = 0; i < atom->nlocal; i++) {
