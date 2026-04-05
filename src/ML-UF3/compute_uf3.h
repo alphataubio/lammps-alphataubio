@@ -49,7 +49,6 @@ class ComputeUF3 : public Compute {
   Compute *c_pe, *c_virial;
   std::string id_virial;
 
-  std::vector<int> number_of_functions, type_offsets;
 };
 
 }    // namespace LAMMPS_NS
