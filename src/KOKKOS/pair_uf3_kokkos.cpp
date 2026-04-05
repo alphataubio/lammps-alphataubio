@@ -12,10 +12,12 @@
 ------------------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------------
-   Contributing author: Ajinkya Hire (Univ. of Florida),
-                        Hendrik Krass (Univ. of Constance),
-                        Matthias Rupp (Luxembourg Institute of Science and Technology),
-                        Richard Hennig (Univ of Florida)
+   Contributing authors: Ajinkya Hire (Univ. of Florida),
+                         Hendrik Krass (Univ. of Constance),
+                         Matthias Rupp (Luxembourg Institute of Science and Technology),
+                         Richard Hennig (Univ of Florida)
+
+   Optimize speed and bugfixes: Mitch Murphy (alphataubio at gmail)
 ---------------------------------------------------------------------- */
 
 #include "pair_uf3.h"
@@ -182,24 +184,26 @@ template <class DeviceType> double PairUF3Kokkos<DeviceType>::init_one(int i, in
 
 template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_coefficients()
 {
-  const int num_of_elements = atom->ntypes;
+  const int ntypes = atom->ntypes;
   coefficients_created = 1;
 
+  // =================================================================
+  // 0. Base Cutoff Setup (Keep your original logic)
+  // =================================================================
   if (pot_3b) {
-    for (int i = 1; i < num_of_elements + 1; i++) {
-      for (int j = 1; j < num_of_elements + 1; j++) {
-        for (int k = 1; k < num_of_elements + 1; k++) {
-          k_cut_3b.view_host()(i,j,k) = uf3_potential->cut_3b[i][j][k];
-
+    for (int i = 1; i <= ntypes; i++) {
+      for (int j = 1; j <= ntypes; j++) {
+        for (int k = 1; k <= ntypes; k++) {
+          k_cut_3b.view_host()(i, j, k) = uf3_potential->cut_3b[i][j][k];
           // Notice the order of min_cut_3b[i][j][k]
           //In min_cut_3b[i][j][k],
           //min_cut_3b[i][j][k][0] is the knot_vector along jk,
           //min_cut_3b[i][j][k][1] is the knot_vector along ik,
           //min_cut_3b[i][j][k][2] is the knot_vector along ij,
           //see pair_uf3.cpp for more details
-          k_min_cut_3b.view_host()(i,j,k,0) = uf3_potential->min_cut_3b[i][j][k][0];
-          k_min_cut_3b.view_host()(i,j,k,1) = uf3_potential->min_cut_3b[i][j][k][1];
-          k_min_cut_3b.view_host()(i,j,k,2) = uf3_potential->min_cut_3b[i][j][k][2];
+          k_min_cut_3b.view_host()(i, j, k, 0) = uf3_potential->min_cut_3b[i][j][k][0];
+          k_min_cut_3b.view_host()(i, j, k, 1) = uf3_potential->min_cut_3b[i][j][k][1];
+          k_min_cut_3b.view_host()(i, j, k, 2) = uf3_potential->min_cut_3b[i][j][k][2];
         }
       }
     }
@@ -207,16 +211,119 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_coefficients(
     k_min_cut_3b.modify_host();
   }
 
-  //No allocation on device for --> setflag, cut, knot_spacing_type_2b,
-  //n2b_knot, n2b_coeff, n2b_knot[i], n2b_coeff[i], setflag_3b, cut_3b,
-  //cut_3b_list, min_cut_3b, knot_spacing_type_3b, cut_3b_list, n3b_knot_matrix,
-  //neighshort
+  // =================================================================
+  // 1. Setup 2B Interaction Map & Pack Precomputed CPU Data
+  // =================================================================
+  Kokkos::realloc(map2b, ntypes + 1, ntypes + 1);
+  auto map2b_view = Kokkos::create_mirror(map2b);
+  int interaction_count_2b = 0;
+  for (int i = 1; i <= ntypes; i++) {
+    for (int j = i; j <= ntypes; j++) {
+      map2b_view(i, j) = interaction_count_2b;
+      map2b_view(j, i) = interaction_count_2b++;
+    }
+  }
+  Kokkos::deep_copy(map2b, map2b_view);
+  int max_knots_2b = uf3_potential->max_num_knots_2b;
+  int max_coeff_2b = uf3_potential->max_num_coeff_2b;
+  Kokkos::realloc(d_n2b_knot, interaction_count_2b, max_knots_2b);
+  Kokkos::realloc(constants_2b, interaction_count_2b, max_coeff_2b, 16);
+  Kokkos::realloc(dnconstants_2b, interaction_count_2b, max_coeff_2b > 0 ? max_coeff_2b - 1 : 0, 9);
+  auto h_n2b_knot = Kokkos::create_mirror_view(d_n2b_knot);
+  auto h_constants_2b = Kokkos::create_mirror_view(constants_2b);
+  auto h_dnconstants_2b = Kokkos::create_mirror_view(dnconstants_2b);
+  for (int i = 1; i <= ntypes; i++) {
+    for (int j = i; j <= ntypes; j++) {
+      int id = map2b_view(i, j);
+      int k_size = uf3_potential->n2b_knots_array_size[i][j];
+      int c_size = uf3_potential->n2b_coeff_array_size[i][j];
+      // Pack Knots
+      for (int k = 0; k < k_size; k++) h_n2b_knot(id, k) = uf3_potential->n2b_knots_array[i][j][k];
+      // Pack Constants
+      for (int k = 0; k < c_size; k++) {
+        for (int c = 0; c < 16; c++) h_constants_2b(id, k, c) = uf3_potential->cached_constants_2b[i][j][k][c];
+      }
+      // Pack Derivative Constants
+      for (int k = 0; k < c_size - 1; k++) {
+        for (int c = 0; c < 9; c++) h_dnconstants_2b(id, k, c) = uf3_potential->cached_constants_2b_deri[i][j][k][c];
+      }
+    }
+  }
+  // Push 2B data to GPU
+  Kokkos::deep_copy(d_n2b_knot, h_n2b_knot);
+  Kokkos::deep_copy(constants_2b, h_constants_2b);
+  Kokkos::deep_copy(dnconstants_2b, h_dnconstants_2b);
 
-  //UFBS2b and UFBS3b are array of objects. Bad idea to use kokkos view(array)
-  //for it
-  //create_2b_coefficients();
-  //if (pot_3b) create_3b_coefficients();
-
+  // =================================================================
+  // 2. Setup 3B Interaction Map & Pack Precomputed CPU Data
+  // =================================================================
+  if (pot_3b) {
+    Kokkos::realloc(map3b, ntypes + 1, ntypes + 1, ntypes + 1);
+    auto map3b_view = Kokkos::create_mirror(map3b);
+    int interaction_count_3b = 0;
+    for (int i = 1; i <= ntypes; i++) {
+      for (int j = 1; j <= ntypes; j++) {
+        for (int k = 1; k <= ntypes; k++) map3b_view(i, j, k) = interaction_count_3b++;
+      }
+    }
+    Kokkos::deep_copy(map3b, map3b_view);
+    int max_knots_3b = uf3_potential->max_num_knots_3b;
+    int max_coeff_3b = uf3_potential->max_num_coeff_3b;
+    Kokkos::realloc(d_n3b_knot_matrix, interaction_count_3b, 3, max_knots_3b);
+    Kokkos::realloc(d_coefficients_3b, interaction_count_3b, max_coeff_3b, max_coeff_3b, max_coeff_3b);
+    Kokkos::realloc(constants_3b, interaction_count_3b, 3, max_coeff_3b, 16);
+    Kokkos::realloc(dnconstants_3b, interaction_count_3b, 3, max_coeff_3b > 0 ? max_coeff_3b - 1 : 0, 9);
+    Kokkos::realloc(d_dncoefficients_3b, interaction_count_3b, 3, max_coeff_3b, max_coeff_3b, max_coeff_3b);
+    auto h_n3b_knot_matrix = Kokkos::create_mirror_view(d_n3b_knot_matrix);
+    auto h_coefficients_3b = Kokkos::create_mirror_view(d_coefficients_3b);
+    auto h_constants_3b = Kokkos::create_mirror_view(constants_3b);
+    auto h_dnconstants_3b = Kokkos::create_mirror_view(dnconstants_3b);
+    auto h_dncoefficients_3b = Kokkos::create_mirror_view(d_dncoefficients_3b);
+    for (int i = 1; i <= ntypes; i++) {
+      for (int j = 1; j <= ntypes; j++) {
+        for (int k = 1; k <= ntypes; k++) {
+          int kid = map3b_view(i, j, k);           // Flattened Kokkos ID
+          int bid = uf3_potential->map_3b[i][j][k]; // Flattened Base ID
+          // Pack Knots (3 dimensions)
+          for (int dim = 0; dim < 3; dim++) {
+            int k_size = uf3_potential->n3b_knots_array_size[bid][dim];
+            for (int m = 0; m < k_size; m++) h_n3b_knot_matrix(kid, dim, m) = uf3_potential->n3b_knots_array[bid][dim][m];
+          }
+          // Pack Coefficients
+          int c_size1 = uf3_potential->n3b_coeff_array_size[bid][0];
+          int c_size2 = uf3_potential->n3b_coeff_array_size[bid][1];
+          int c_size3 = uf3_potential->n3b_coeff_array_size[bid][2];
+          for (int c1 = 0; c1 < c_size1; c1++) {
+            for (int c2 = 0; c2 < c_size2; c2++) {
+              for (int c3 = 0; c3 < c_size3; c3++) {
+                h_coefficients_3b(kid, c1, c2, c3) = uf3_potential->n3b_coeff_array[bid][c1][c2][c3];
+                // Pack Derivative Coefficients mapping: dim 0 = ij, dim 1 = ik, dim 2 = jk
+                h_dncoefficients_3b(kid, 0, c1, c2, c3) = uf3_potential->coeff_for_der_ij[bid][c1][c2][c3];
+                h_dncoefficients_3b(kid, 1, c1, c2, c3) = uf3_potential->coeff_for_der_ik[bid][c1][c2][c3];
+                h_dncoefficients_3b(kid, 2, c1, c2, c3) = uf3_potential->coeff_for_der_jk[bid][c1][c2][c3];
+              }
+            }
+          }
+          // Pack Constants and Derivative Constants
+          for (int dim = 0; dim < 3; dim++) {
+            int c_size = uf3_potential->n3b_coeff_array_size[bid][dim];
+            for (int m = 0; m < c_size; m++) {
+              for (int c = 0; c < 16; c++) h_constants_3b(kid, dim, m, c) = uf3_potential->cached_constants_3b[bid][dim][m][c];
+            }
+            for (int m = 0; m < c_size - 1; m++) {
+              for (int c = 0; c < 9; c++) h_dnconstants_3b(kid, dim, m, c) = uf3_potential->cached_constants_3b_deri[bid][dim][m][c];
+            }
+          }
+        }
+      }
+    }
+    // Push 3B data to GPU
+    Kokkos::deep_copy(d_n3b_knot_matrix, h_n3b_knot_matrix);
+    Kokkos::deep_copy(d_coefficients_3b, h_coefficients_3b);
+    Kokkos::deep_copy(constants_3b, h_constants_3b);
+    Kokkos::deep_copy(dnconstants_3b, h_dnconstants_3b);
+    Kokkos::deep_copy(d_dncoefficients_3b, h_dncoefficients_3b);
+  }
 }
 
 
@@ -1008,717 +1115,3 @@ template class PairUF3Kokkos<LMPHostType>;
 #endif
 }    // namespace LAMMPS_NS
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-
-
-
-template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_2b_coefficients()
-{
-  const int num_of_elements = atom->ntypes;
-
-  // Setup interaction pair map
-  //TODO: Instead of using map2b and map3b use simple indexing
-  Kokkos::realloc(map2b, num_of_elements + 1, num_of_elements + 1);
-  auto map2b_view = Kokkos::create_mirror(map2b);
-
-  int interaction_count = 0;
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = i; j < num_of_elements + 1; j++) {
-      map2b_view(i, j) = interaction_count;
-      map2b_view(j, i) = interaction_count++;
-    }
-  }
-  Kokkos::deep_copy(map2b, map2b_view);
-
-  // Count max knots for array size
-
-  const int max_knots = uf3_potential->max_num_knots_2b;
-
-  // Copy coefficients to view
-
-  Kokkos::realloc(d_coefficients_2b, interaction_count, max_knots - 4);
-  auto d_coefficients_2b_view = Kokkos::create_mirror(d_coefficients_2b);
-
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = i; j < num_of_elements + 1; j++) {
-      for (int k = 0; k < uf3_potential->max_num_coeff_2b; k++)
-        d_coefficients_2b_view(map2b_view(i, j), k) = uf3_potential->n2b_coeff_array[i][j][k];
-    }
-  }
-  Kokkos::deep_copy(d_coefficients_2b, d_coefficients_2b_view);
-
-  // Copy knots from array to view
-
-  Kokkos::realloc(d_n2b_knot, interaction_count, max_knots);
-  Kokkos::realloc(d_n2b_knot_spacings, interaction_count);
-  auto d_n2b_knot_view = Kokkos::create_mirror(d_n2b_knot);
-  auto d_n2b_knot_spacings_view = Kokkos::create_mirror(d_n2b_knot_spacings);
-
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = i; j < num_of_elements + 1; j++) {
-      double *n2b_knots_array_ij = uf3_potential->n2b_knots_array[i][j];
-      for (int k = 0; k < uf3_potential->max_num_knots_2b; k++)
-        d_n2b_knot_view(map2b_view(i, j), k) = n2b_knots_array_ij[k];
-      d_n2b_knot_spacings_view(map2b_view(i, j)) = n2b_knots_array_ij[4] - n2b_knots_array_ij[3];
-    }
-  }
-
-  Kokkos::deep_copy(d_n2b_knot, d_n2b_knot_view);
-  Kokkos::deep_copy(d_n2b_knot_spacings, d_n2b_knot_spacings_view);
-  // Set spline constants
-
-  Kokkos::realloc(constants_2b, interaction_count, max_knots - 4);
-  auto constants_2b_view = Kokkos::create_mirror(constants_2b);
-
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = i; j < num_of_elements + 1; j++) {
-      for (int l = 0; l < uf3_potential->n2b_knots_array_size[i][j] - 4; l++) {
-        //n2b_knot[i][j].size() - 4; l++) {
-        auto c = get_constants(&uf3_potential->n2b_knots_array[i][j][l],
-                               uf3_potential->n2b_coeff_array[i][j][l]);
-        for (int k = 0; k < 16; k++)
-          constants_2b_view(map2b_view(i, j), l, k) = (std::isinf(c[k]) || std::isnan(c[k])) ? 0
-                                                                                             : c[k];
-      }
-    }
-  }
-  Kokkos::deep_copy(constants_2b, constants_2b_view);
-
-  Kokkos::realloc(dnconstants_2b, interaction_count, max_knots - 5);
-  auto dnconstants_2b_view = Kokkos::create_mirror(dnconstants_2b);
-
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = i; j < num_of_elements + 1; j++) {
-      for (int l = 0; l < uf3_potential->n2b_knots_array_size[i][j] - 5; l++) {
-        double *n2b_knots_array_ij = uf3_potential->n2b_knots_array[i][j];
-        double *n2b_coeff_array_ij = uf3_potential->n2b_coeff_array[i][j];
-        double dntemp4 = 3 / (n2b_knots_array_ij[l + 4] - n2b_knots_array_ij[l + 1]);
-        double coeff = (n2b_coeff_array_ij[l + 1] - n2b_coeff_array_ij[l]) * dntemp4;
-        auto c = get_dnconstants(&n2b_knots_array_ij[l + 1], coeff);
-        for (int k = 0; k < 9; k++)
-          dnconstants_2b_view(map2b_view(i, j), l, k) =
-              (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-      }
-    }
-  }
-  Kokkos::deep_copy(dnconstants_2b, dnconstants_2b_view);
-}
-
-template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_3b_coefficients()
-{
-  const int num_of_elements = atom->ntypes;
-  // Init interaction map for 3B
-
-  Kokkos::realloc(map3b, num_of_elements + 1, num_of_elements + 1, num_of_elements + 1);
-  auto map3b_view = Kokkos::create_mirror(map3b);
-
-  int interaction_count = 0;
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = 1; j < num_of_elements + 1; j++) {
-      for (int k = 1; k < num_of_elements + 1; k++) {
-        map3b_view(i, j, k) = interaction_count;
-        interaction_count++;
-      }
-    }
-  }
-  Kokkos::deep_copy(map3b, map3b_view);
-
-  // Count max knots for view
-
-  const int max_knots = uf3_potential->max_num_knots_3b;
-  //In n3b_knot_matrix[i][j][k],
-  //n3b_knot_matrix[i][j][k][0] is the knot_vector along jk,
-  //n3b_knot_matrix[i][j][k][1] is the knot_vector along ik,
-  //n3b_knot_matrix[i][j][k][2] is the knot_vector along ij,
-  //see pair_uf3.cpp for more details
-
-
-  // Init knot matrix view
-
-  Kokkos::realloc(d_n3b_knot_matrix, interaction_count, 3, max_knots);
-  Kokkos::realloc(d_n3b_knot_matrix_spacings, interaction_count, 3);
-  auto d_n3b_knot_matrix_view = Kokkos::create_mirror(d_n3b_knot_matrix);
-  auto d_n3b_knot_matrix_spacings_view = Kokkos::create_mirror(d_n3b_knot_matrix_spacings);
-
-  for (int i = 1; i < num_of_elements + 1; i++)
-    for (int j = 1; j < num_of_elements + 1; j++)
-      for (int k = 1; k < num_of_elements + 1; k++) {
-        auto map_3b_ijk = uf3_potential->map_3b[i][j][k];
-        auto n3b_knots_array_ijk = uf3_potential->n3b_knots_array[map_3b_ijk];
-        for (int m = 0; m < uf3_potential->n3b_knots_array_size[map_3b_ijk][0]; m++)
-          d_n3b_knot_matrix_view(map3b_view(i, j, k), 0, m) = n3b_knots_array_ijk[0][m];
-        for (int m = 0; m < uf3_potential->n3b_knots_array_size[map_3b_ijk][1]; m++)
-          d_n3b_knot_matrix_view(map3b_view(i, j, k), 1, m) = n3b_knots_array_ijk[1][m];
-        for (int m = 0; m < uf3_potential->n3b_knots_array_size[map_3b_ijk][2]; m++)
-          d_n3b_knot_matrix_view(map3b_view(i, j, k), 2, m) = n3b_knots_array_ijk[2][m];
-
-        d_n3b_knot_matrix_spacings_view(map3b_view(i, j, k),2) =
-          n3b_knots_array_ijk[2][4] - n3b_knots_array_ijk[2][3];
-
-        d_n3b_knot_matrix_spacings_view(map3b_view(i, j, k),1) =
-          n3b_knots_array_ijk[1][4] - n3b_knots_array_ijk[1][3];
-
-        d_n3b_knot_matrix_spacings_view(map3b_view(i, j, k),0) =
-          n3b_knots_array_ijk[0][4] - n3b_knots_array_ijk[0][3];
-      }
-  Kokkos::deep_copy(d_n3b_knot_matrix, d_n3b_knot_matrix_view);
-  Kokkos::deep_copy(d_n3b_knot_matrix_spacings, d_n3b_knot_matrix_spacings_view);
-
-  // Set knots spacings
-
-  Kokkos::realloc(d_n3b_knot_spacings, interaction_count, 3);
-  auto d_n3b_knot_spacings_view = Kokkos::create_mirror(d_n3b_knot_spacings);
-
-  for (int i = 1; i < num_of_elements + 1; i++) {
-    for (int j = 1; j < num_of_elements + 1; j++) {
-      for (int k = 1; k < num_of_elements + 1; k++) {
-        auto map_3b_ijk = uf3_potential->map_3b[i][j][k];
-        auto n3b_knots_array_ijk = uf3_potential->n3b_knots_array[map_3b_ijk];
-        d_n3b_knot_spacings_view(map3b_view(i, j, k), 0) =
-          1 / (n3b_knots_array_ijk[0][5] - n3b_knots_array_ijk[0][4]);
-
-        d_n3b_knot_spacings_view(map3b_view(i, j, k), 1) =
-          1 / (n3b_knots_array_ijk[1][5] - n3b_knots_array_ijk[1][4]);
-
-        d_n3b_knot_spacings_view(map3b_view(i, j, k), 2) =
-          1 / (n3b_knots_array_ijk[2][5] - n3b_knots_array_ijk[2][4]);
-      }
-    }
-  }
-  Kokkos::deep_copy(d_n3b_knot_spacings, d_n3b_knot_spacings_view);
-
-  // Copy coefficients
-
-  Kokkos::realloc(d_coefficients_3b, interaction_count, max_knots - 4, max_knots - 4,
-                  max_knots - 4);
-  auto d_coefficients_3b_view = Kokkos::create_mirror(d_coefficients_3b);
-
-  for (int n = 1; n < num_of_elements + 1; n++) {
-    for (int m = 1; m < num_of_elements + 1; m++) {
-      for (int o = 1; o < num_of_elements + 1; o++) {
-        auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
-        auto n3b_coeff_array_size_nmo = uf3_potential->n3b_coeff_array_size[map_3b_nmo];
-        auto n3b_coeff_array_nmo = uf3_potential->n3b_coeff_array[map_3b_nmo];
-        for (int i = 0; i < n3b_coeff_array_size_nmo[0]; i++) {
-          for (int j = 0; j < n3b_coeff_array_size_nmo[1]; j++) {
-            for (int k = 0; k < n3b_coeff_array_size_nmo[2]; k++) {
-              d_coefficients_3b_view(map3b_view(n, m, o), i, j, k) =
-                  n3b_coeff_array_nmo[i][j][k];
-            }
-          }
-        }
-      }
-    }
-  }
-  Kokkos::deep_copy(d_coefficients_3b, d_coefficients_3b_view);
-  //
-  // Create derivative coefficients
-
-  // TODO: Shrink size
-  Kokkos::realloc(d_dncoefficients_3b, interaction_count, 3, max_knots - 4, max_knots - 4,
-                  max_knots - 4);
-  auto d_dncoefficients_3b_view = Kokkos::create_mirror(d_dncoefficients_3b);
-
-  //Notice the order for d_dncoefficients_3b_view(map3b_view(n, m, o), X, i, j, k)
-  //d_dncoefficients_3b_view(map3b_view(n, m, o), 2, i, j, k) --> coeff for rjk
-  //d_dncoefficients_3b_view(map3b_view(n, m, o), 1, i, j, k) --> coeff for rik
-  //d_dncoefficients_3b_view(map3b_view(n, m, o), 0, i, j, k) --> coeff for rij
-  //
-  //This is because-
-  //In n3b_knot_matrix[i][j][k],
-  //n3b_knot_matrix[i][j][k][0] is the knot_vector along jk,
-  //n3b_knot_matrix[i][j][k][1] is the knot_vector along ik,
-  //n3b_knot_matrix[i][j][k][2] is the knot_vector along ij,
-  //see pair_uf3.cpp for more details
-
-  for (int n = 1; n < num_of_elements + 1; n++) {
-    for (int m = 1; m < num_of_elements + 1; m++) {
-      for (int o = 1; o < num_of_elements + 1; o++) {
-
-        auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
-        auto n3b_coeff_array_size_nmo = uf3_potential->n3b_coeff_array_size[map_3b_nmo];
-        auto n3b_coeff_array_nmo = uf3_potential->n3b_coeff_array[map_3b_nmo];
-        auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
-        const int coeff_dim1 = n3b_coeff_array_size_nmo[0];
-        const int coeff_dim2 = n3b_coeff_array_size_nmo[1];
-        const int coeff_dim3 = n3b_coeff_array_size_nmo[2];
-
-        for (int i = 0; i < coeff_dim1; i++) {
-          for (int j = 0; j < coeff_dim2; j++) {
-            for (int k = 0; k < coeff_dim3-1; k++) {
-              double dntemp4 = 3 / (n3b_knots_array_nmo[0][k+4] - n3b_knots_array_nmo[0][k+1]);
-              d_dncoefficients_3b_view(map3b_view(n, m, o), 2, i, j, k) =
-                  (n3b_coeff_array_nmo[i][j][k+1] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
-            }
-          }
-        }
-
-        for (int i = 0; i < coeff_dim1; i++) {
-          for (int j = 0; j < coeff_dim2-1; j++) {
-            double dntemp4 = 3 / (n3b_knots_array_nmo[1][j+4] - n3b_knots_array_nmo[1][j+1]);
-            for (int k = 0; k < coeff_dim3; k++) {
-              d_dncoefficients_3b_view(map3b_view(n, m, o), 1, i, j, k) =
-                  (n3b_coeff_array_nmo[i][j+1][k] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
-            }
-          }
-        }
-
-        for (int i = 0; i < coeff_dim1-1; i++) {
-          double dntemp4 = 3 / (n3b_knots_array_nmo[2][i+4] - n3b_knots_array_nmo[2][i+1]);
-          for (int j = 0; j < coeff_dim2; j++) {
-            for (int k = 0; k < coeff_dim3; k++) {
-              d_dncoefficients_3b_view(map3b_view(n, m, o), 0, i, j, k) =
-                  (n3b_coeff_array_nmo[i+1][j][k] - n3b_coeff_array_nmo[i][j][k]) * dntemp4;
-            }
-          }
-        }
-      }
-    }
-  }
-  Kokkos::deep_copy(d_dncoefficients_3b, d_dncoefficients_3b_view);
-
-  // Set spline constants
-
-  Kokkos::realloc(constants_3b, interaction_count, 3, max_knots - 4);
-  auto constants_3b_view = Kokkos::create_mirror(constants_3b);
-
-  //In n3b_knot_matrix[i][j][k],
-  //n3b_knot_matrix[i][j][k][0] is the knot_vector along jk,
-  //n3b_knot_matrix[i][j][k][1] is the knot_vector along ik,
-  //n3b_knot_matrix[i][j][k][2] is the knot_vector along ij,
-  //see pair_uf3.cpp for more details
-  for (int n = 1; n < num_of_elements + 1; n++) {
-    for (int m = 1; m < num_of_elements + 1; m++) {
-      for (int o = 1; o < num_of_elements + 1; o++) {
-
-        auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
-        auto n3b_knots_array_size_nmo = uf3_potential->n3b_knots_array_size[map_3b_nmo];
-        auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
-
-        for (int l = 0; l < n3b_knots_array_size_nmo[2] - 4; l++) {
-          auto c = get_constants(&n3b_knots_array_nmo[2][l], 1);
-          for (int k = 0; k < 16; k++)
-            constants_3b_view(map3b_view(n, m, o), 0, l, k) =
-                (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-        }
-        for (int l = 0; l < n3b_knots_array_size_nmo[1] - 4; l++) {
-          auto c = get_constants(&n3b_knots_array_nmo[1][l], 1);
-          for (int k = 0; k < 16; k++)
-            constants_3b_view(map3b_view(n, m, o), 1, l, k) =
-                (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-        }
-        for (int l = 0; l < n3b_knots_array_size_nmo[0] -4; l++) {
-          auto c = get_constants(&n3b_knots_array_nmo[0][l], 1);
-          for (int k = 0; k < 16; k++)
-            constants_3b_view(map3b_view(n, m, o), 2, l, k) =
-                (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-        }
-      }
-    }
-  }
-  Kokkos::deep_copy(constants_3b, constants_3b_view);
-
-  Kokkos::realloc(dnconstants_3b, interaction_count, 3, max_knots - 6);
-  auto dnconstants_3b_view = Kokkos::create_mirror(dnconstants_3b);
-
-  for (int n = 1; n < num_of_elements + 1; n++) {
-    for (int m = 1; m < num_of_elements + 1; m++) {
-      for (int o = 1; o < num_of_elements + 1; o++) {
-
-        auto map_3b_nmo = uf3_potential->map_3b[n][m][o];
-        auto n3b_knots_array_size_nmo = uf3_potential->n3b_knots_array_size[map_3b_nmo];
-        auto n3b_knots_array_nmo = uf3_potential->n3b_knots_array[map_3b_nmo];
-
-        for (int l = 1; l < n3b_knots_array_size_nmo[2] - 5; l++) {
-          auto c = get_dnconstants(&n3b_knots_array_nmo[2][l], 1);
-          for (int k = 0; k < 9; k++)
-            dnconstants_3b_view(map3b_view(n, m, o), 0, l - 1, k) =
-                (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-        }
-        for (int l = 1; l < n3b_knots_array_size_nmo[1] - 5; l++) {
-          auto c = get_dnconstants(&n3b_knots_array_nmo[1][l], 1);
-          for (int k = 0; k < 9; k++)
-            dnconstants_3b_view(map3b_view(n, m, o), 1, l - 1, k) =
-                (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-        }
-        for (int l = 1; l < n3b_knots_array_size_nmo[0] - 5; l++) {
-          auto c = get_dnconstants(&n3b_knots_array_nmo[0][l], 1);
-          for (int k = 0; k < 9; k++)
-            dnconstants_3b_view(map3b_view(n, m, o), 2, l - 1, k) =
-                (std::isinf(c[k]) || std::isnan(c[k])) ? 0 : c[k];
-        }
-      }
-    }
-  }
-  Kokkos::deep_copy(dnconstants_3b, dnconstants_3b_view);
-}
-
-
-template <class DeviceType>
-std::vector<double> PairUF3Kokkos<DeviceType>::get_constants(double *knots, double coefficient)
-{
-
-  std::vector<double> constants(16);
-
-  constants[0] = coefficient *
-      (-cube(knots[0]) /
-       (-cube(knots[0]) + square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-        square(knots[0]) * knots[3] - knots[0] * knots[1] * knots[2] -
-        knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-        knots[1] * knots[2] * knots[3]));
-  constants[1] = coefficient *
-      (3 * square(knots[0]) /
-       (-cube(knots[0]) + square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-        square(knots[0]) * knots[3] - knots[0] * knots[1] * knots[2] -
-        knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-        knots[1] * knots[2] * knots[3]));
-  constants[2] = coefficient *
-      (-3 * knots[0] /
-       (-cube(knots[0]) + square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-        square(knots[0]) * knots[3] - knots[0] * knots[1] * knots[2] -
-        knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-        knots[1] * knots[2] * knots[3]));
-  constants[3] = coefficient *
-      (1 /
-       (-cube(knots[0]) + square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-        square(knots[0]) * knots[3] - knots[0] * knots[1] * knots[2] -
-        knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-        knots[1] * knots[2] * knots[3]));
-  constants[4] = coefficient *
-      (square(knots[1]) * knots[4] /
-           (-cube(knots[1]) + square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            square(knots[1]) * knots[4] - knots[1] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            knots[2] * knots[3] * knots[4]) +
-       square(knots[0]) * knots[2] /
-           (-square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-            knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] -
-            knots[0] * square(knots[2]) - knots[0] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[3] + square(knots[2]) * knots[3]) +
-       knots[0] * knots[1] * knots[3] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])));
-  constants[5] = coefficient *
-      (-square(knots[1]) /
-           (-cube(knots[1]) + square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            square(knots[1]) * knots[4] - knots[1] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            knots[2] * knots[3] * knots[4]) -
-       2 * knots[1] * knots[4] /
-           (-cube(knots[1]) + square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            square(knots[1]) * knots[4] - knots[1] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            knots[2] * knots[3] * knots[4]) -
-       square(knots[0]) /
-           (-square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-            knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] -
-            knots[0] * square(knots[2]) - knots[0] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[3] + square(knots[2]) * knots[3]) -
-       2 * knots[0] * knots[2] /
-           (-square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-            knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] -
-            knots[0] * square(knots[2]) - knots[0] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[3] + square(knots[2]) * knots[3]) -
-       knots[0] * knots[1] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])) -
-       knots[0] * knots[3] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])) -
-       knots[1] * knots[3] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])));
-  constants[6] = coefficient *
-      (2 * knots[1] /
-           (-cube(knots[1]) + square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            square(knots[1]) * knots[4] - knots[1] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            knots[2] * knots[3] * knots[4]) +
-       knots[4] /
-           (-cube(knots[1]) + square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            square(knots[1]) * knots[4] - knots[1] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            knots[2] * knots[3] * knots[4]) +
-       2 * knots[0] /
-           (-square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-            knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] -
-            knots[0] * square(knots[2]) - knots[0] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[3] + square(knots[2]) * knots[3]) +
-       knots[2] /
-           (-square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-            knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] -
-            knots[0] * square(knots[2]) - knots[0] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[3] + square(knots[2]) * knots[3]) +
-       knots[0] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])) +
-       knots[1] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])) +
-       knots[3] /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])));
-  constants[7] = coefficient *
-      (-1 /
-           (-cube(knots[1]) + square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            square(knots[1]) * knots[4] - knots[1] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            knots[2] * knots[3] * knots[4]) -
-       1 /
-           (-square(knots[0]) * knots[1] + square(knots[0]) * knots[2] +
-            knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] -
-            knots[0] * square(knots[2]) - knots[0] * knots[2] * knots[3] -
-            knots[1] * knots[2] * knots[3] + square(knots[2]) * knots[3]) -
-       1 /
-           (-knots[0] * square(knots[1]) + knots[0] * knots[1] * knots[2] +
-            knots[0] * knots[1] * knots[3] - knots[0] * knots[2] * knots[3] +
-            square(knots[1]) * knots[3] - knots[1] * knots[2] * knots[3] -
-            knots[1] * square(knots[3]) + knots[2] * square(knots[3])));
-  constants[8] = coefficient *
-      (-knots[0] * square(knots[3]) /
-           (-knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] +
-            knots[0] * knots[2] * knots[3] - knots[0] * square(knots[3]) +
-            knots[1] * knots[2] * knots[3] - knots[1] * square(knots[3]) -
-            knots[2] * square(knots[3]) + cube(knots[3])) -
-       knots[1] * knots[3] * knots[4] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) -
-       knots[2] * square(knots[4]) /
-           (-knots[1] * square(knots[2]) + knots[1] * knots[2] * knots[3] +
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            square(knots[2]) * knots[4] - knots[2] * knots[3] * knots[4] -
-            knots[2] * square(knots[4]) + knots[3] * square(knots[4])));
-  constants[9] = coefficient *
-      (2 * knots[0] * knots[3] /
-           (-knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] +
-            knots[0] * knots[2] * knots[3] - knots[0] * square(knots[3]) +
-            knots[1] * knots[2] * knots[3] - knots[1] * square(knots[3]) -
-            knots[2] * square(knots[3]) + cube(knots[3])) +
-       square(knots[3]) /
-           (-knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] +
-            knots[0] * knots[2] * knots[3] - knots[0] * square(knots[3]) +
-            knots[1] * knots[2] * knots[3] - knots[1] * square(knots[3]) -
-            knots[2] * square(knots[3]) + cube(knots[3])) +
-       knots[1] * knots[3] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) +
-       knots[1] * knots[4] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) +
-       knots[3] * knots[4] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) +
-       2 * knots[2] * knots[4] /
-           (-knots[1] * square(knots[2]) + knots[1] * knots[2] * knots[3] +
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            square(knots[2]) * knots[4] - knots[2] * knots[3] * knots[4] -
-            knots[2] * square(knots[4]) + knots[3] * square(knots[4])) +
-       square(knots[4]) /
-           (-knots[1] * square(knots[2]) + knots[1] * knots[2] * knots[3] +
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            square(knots[2]) * knots[4] - knots[2] * knots[3] * knots[4] -
-            knots[2] * square(knots[4]) + knots[3] * square(knots[4])));
-  constants[10] = coefficient *
-      (-knots[0] /
-           (-knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] +
-            knots[0] * knots[2] * knots[3] - knots[0] * square(knots[3]) +
-            knots[1] * knots[2] * knots[3] - knots[1] * square(knots[3]) -
-            knots[2] * square(knots[3]) + cube(knots[3])) -
-       2 * knots[3] /
-           (-knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] +
-            knots[0] * knots[2] * knots[3] - knots[0] * square(knots[3]) +
-            knots[1] * knots[2] * knots[3] - knots[1] * square(knots[3]) -
-            knots[2] * square(knots[3]) + cube(knots[3])) -
-       knots[1] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) -
-       knots[3] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) -
-       knots[4] /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) -
-       knots[2] /
-           (-knots[1] * square(knots[2]) + knots[1] * knots[2] * knots[3] +
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            square(knots[2]) * knots[4] - knots[2] * knots[3] * knots[4] -
-            knots[2] * square(knots[4]) + knots[3] * square(knots[4])) -
-       2 * knots[4] /
-           (-knots[1] * square(knots[2]) + knots[1] * knots[2] * knots[3] +
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            square(knots[2]) * knots[4] - knots[2] * knots[3] * knots[4] -
-            knots[2] * square(knots[4]) + knots[3] * square(knots[4])));
-  constants[11] = coefficient *
-      (1 /
-           (-knots[0] * knots[1] * knots[2] + knots[0] * knots[1] * knots[3] +
-            knots[0] * knots[2] * knots[3] - knots[0] * square(knots[3]) +
-            knots[1] * knots[2] * knots[3] - knots[1] * square(knots[3]) -
-            knots[2] * square(knots[3]) + cube(knots[3])) +
-       1 /
-           (-square(knots[1]) * knots[2] + square(knots[1]) * knots[3] +
-            knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] -
-            knots[1] * square(knots[3]) - knots[1] * knots[3] * knots[4] -
-            knots[2] * knots[3] * knots[4] + square(knots[3]) * knots[4]) +
-       1 /
-           (-knots[1] * square(knots[2]) + knots[1] * knots[2] * knots[3] +
-            knots[1] * knots[2] * knots[4] - knots[1] * knots[3] * knots[4] +
-            square(knots[2]) * knots[4] - knots[2] * knots[3] * knots[4] -
-            knots[2] * square(knots[4]) + knots[3] * square(knots[4])));
-  constants[12] = coefficient *
-      (cube(knots[4]) /
-       (-knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] +
-        knots[1] * knots[3] * knots[4] - knots[1] * square(knots[4]) +
-        knots[2] * knots[3] * knots[4] - knots[2] * square(knots[4]) - knots[3] * square(knots[4]) +
-        cube(knots[4])));
-  constants[13] = coefficient *
-      (-3 * square(knots[4]) /
-       (-knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] +
-        knots[1] * knots[3] * knots[4] - knots[1] * square(knots[4]) +
-        knots[2] * knots[3] * knots[4] - knots[2] * square(knots[4]) - knots[3] * square(knots[4]) +
-        cube(knots[4])));
-  constants[14] = coefficient *
-      (3 * knots[4] /
-       (-knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] +
-        knots[1] * knots[3] * knots[4] - knots[1] * square(knots[4]) +
-        knots[2] * knots[3] * knots[4] - knots[2] * square(knots[4]) - knots[3] * square(knots[4]) +
-        cube(knots[4])));
-  constants[15] = coefficient *
-      (-1 /
-       (-knots[1] * knots[2] * knots[3] + knots[1] * knots[2] * knots[4] +
-        knots[1] * knots[3] * knots[4] - knots[1] * square(knots[4]) +
-        knots[2] * knots[3] * knots[4] - knots[2] * square(knots[4]) - knots[3] * square(knots[4]) +
-        cube(knots[4])));
-
-  return constants;
-}
-
-template <class DeviceType>
-std::vector<double> PairUF3Kokkos<DeviceType>::get_dnconstants(double *knots, double coefficient)
-{
-  std::vector<double> constants(9);
-
-  constants[0] = coefficient *
-      (square(knots[0]) /
-       (square(knots[0]) - knots[0] * knots[1] - knots[0] * knots[2] + knots[1] * knots[2]));
-  constants[1] = coefficient *
-      (-2 * knots[0] /
-       (square(knots[0]) - knots[0] * knots[1] - knots[0] * knots[2] + knots[1] * knots[2]));
-  constants[2] = coefficient *
-      (1 / (square(knots[0]) - knots[0] * knots[1] - knots[0] * knots[2] + knots[1] * knots[2]));
-  constants[3] = coefficient *
-      (-knots[1] * knots[3] /
-           (square(knots[1]) - knots[1] * knots[2] - knots[1] * knots[3] + knots[2] * knots[3]) -
-       knots[0] * knots[2] /
-           (knots[0] * knots[1] - knots[0] * knots[2] - knots[1] * knots[2] + square(knots[2])));
-  constants[4] = coefficient *
-      (knots[1] /
-           (square(knots[1]) - knots[1] * knots[2] - knots[1] * knots[3] + knots[2] * knots[3]) +
-       knots[3] /
-           (square(knots[1]) - knots[1] * knots[2] - knots[1] * knots[3] + knots[2] * knots[3]) +
-       knots[0] /
-           (knots[0] * knots[1] - knots[0] * knots[2] - knots[1] * knots[2] + square(knots[2])) +
-       knots[2] /
-           (knots[0] * knots[1] - knots[0] * knots[2] - knots[1] * knots[2] + square(knots[2])));
-  constants[5] = coefficient *
-      (-1 / (square(knots[1]) - knots[1] * knots[2] - knots[1] * knots[3] + knots[2] * knots[3]) -
-       1 / (knots[0] * knots[1] - knots[0] * knots[2] - knots[1] * knots[2] + square(knots[2])));
-  constants[6] = coefficient *
-      (square(knots[3]) /
-       (knots[1] * knots[2] - knots[1] * knots[3] - knots[2] * knots[3] + square(knots[3])));
-  constants[7] = coefficient *
-      (-2 * knots[3] /
-       (knots[1] * knots[2] - knots[1] * knots[3] - knots[2] * knots[3] + square(knots[3])));
-  constants[8] = coefficient *
-      (1 / (knots[1] * knots[2] - knots[1] * knots[3] - knots[2] * knots[3] + square(knots[3])));
-
-  return constants;
-}
-
- */

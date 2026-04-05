@@ -92,35 +92,8 @@ template <class DeviceType> class PairUF3Kokkos : public PairUF3 {
   typename AT::t_kkfloat_4d d_min_cut_3b, constants_3b, dnconstants_3b, d_coefficients_3b;
   Kokkos::View<KK_FLOAT*****, LMPDeviceLayout, LMPDeviceType> d_dncoefficients_3b;
 
-  /*
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n2b_knot;
-  Kokkos::View<KK_FLOAT ***, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_matrix;
-  Kokkos::View<KK_FLOAT **[16], LMPDeviceLayout, LMPDeviceType> constants_2b;
-  Kokkos::View<KK_FLOAT **[9], LMPDeviceLayout, LMPDeviceType> dnconstants_2b;
-  Kokkos::View<KK_FLOAT ***[16], LMPDeviceLayout, LMPDeviceType> constants_3b;
-  Kokkos::View<KK_FLOAT ***[9], LMPDeviceLayout, LMPDeviceType> dnconstants_3b;
-  Kokkos::View<KK_FLOAT ****, LMPDeviceLayout, LMPDeviceType> d_coefficients_3b;
-
-
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_coefficients_2b;
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_dncoefficients_2b;
-  Kokkos::View<KK_FLOAT *, LMPDeviceLayout, LMPDeviceType> d_n2b_knot_spacings;
-  Kokkos::View<KK_FLOAT[4][4], LMPDeviceLayout, LMPDeviceType> constants;
-  Kokkos::View<KK_FLOAT[3][3], LMPDeviceLayout, LMPDeviceType> dnconstants;
-
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_spacings;
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_matrix_spacings;
-
-  std::vector<double> get_constants(double *knots, double coefficient);
-  std::vector<double> get_dnconstants(double *knots, double coefficient);
-  */
-
   int coefficients_created = 0;
   void create_coefficients();
-  //void create_3b_coefficients();
-  //void create_2b_coefficients();
-  std::vector<double> get_coefficients(const double *knots, const double coefficient) const;
-  std::vector<double> get_dncoefficients(const double *knots, const double coefficient) const;
 
   template <int EVFLAG>
 // NOLINTNEXTLINE
