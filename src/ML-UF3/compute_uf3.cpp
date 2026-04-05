@@ -47,14 +47,9 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   memory->create(cutsq, np1, np1, "uf3:cutsq");
   if (pot_3b) memory->create(neighshort, maxshort, "uf3:neighshort");
 
-  std::vector<std::string> elements_(narg - 2);
-  for(int i=2; i<narg ; i++) elements_.push_back(arg[i]);
-  uf3_potential = new UF3Potential(lmp, arg[1], cutsq, setflag, elements_, pot_3b);
-
-  // ACECTildeEvaluator::get_func_ind_shift() has a bug so instead lets do it manually here
-  ncoeff = 0;
-  number_of_functions = std::vector<int>(ntypes+1, 0);
-  type_offsets = std::vector<int>(ntypes+1, 0);
+  std::vector<std::string> elements_(1); // blank [0] to use ntypes+1;
+  for(int i=5; i<narg ; i++) elements_.push_back(arg[i]);
+  uf3_potential = new UF3Potential(lmp, arg[4], cutsq, setflag, elements_, pot_3b);
 
   if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
   else size_array_rows = 1 + 3*(atom->natoms);

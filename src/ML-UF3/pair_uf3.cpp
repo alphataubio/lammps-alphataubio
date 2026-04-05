@@ -92,7 +92,7 @@ void PairUF3::coeff(int narg, char **arg)
   if (narg != 3 + atom->ntypes)
     error->all(FLERR, "Invalid number of arguments uf3 in pair coeffs.");
   if (!allocated) allocate();
-  std::vector<std::string> elements_(narg - 3);
+  std::vector<std::string> elements_(1); // blank [0] to use ntypes+1
   for(int i=3; i<narg ; i++) elements_.push_back(arg[i]);
   uf3_potential = new UF3Potential(lmp, arg[2], cutsq, setflag, elements_, pot_3b);
 }

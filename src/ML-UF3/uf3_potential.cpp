@@ -60,8 +60,7 @@ UF3Potential::UF3Potential(LAMMPS *lmp, const std::string &potf_name,
   max_num_coeff_3b = 0;
   tot_interaction_count_3b = 0;
 
-  int type = 0;
-  for( const auto &element : elements ) element_to_type[element] = ++type;
+  for (int i=1; i < elements.size(); i++) element_to_type[elements[i]] = i;
 
   if (comm->me == 0) utils::logmesg(lmp, "Reading UF3 potential {}... ", potf_name);
   double time1 = platform::walltime();
@@ -691,15 +690,15 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
         //i-j interaction not set
 
         //maybe i-j is mapped to some other atom type interaction?
-        int i_mapped_to = element_to_type[elements[i-1]];
-        int j_mapped_to = element_to_type[elements[j-1]];
+        int i_mapped_to = element_to_type[elements[i]];
+        int j_mapped_to = element_to_type[elements[j]];
 
         if ((i_mapped_to == i) && (j_mapped_to == j))
           //i-j is not mapped to some other atom type ie interaction is missing on file
           error->all(FLERR,
                      "UF3: Potential for interaction {}-{} ie {}-{} not found "
                      "in {} file",
-                     i, j, elements[i_mapped_to - 1], elements[j_mapped_to - 1], potf_name);
+                     i, j, elements[i_mapped_to], elements[j_mapped_to], potf_name);
 
         cut_2b[i][j] = cut_2b[i_mapped_to][j_mapped_to];
 
@@ -726,21 +725,17 @@ void UF3Potential::uf3_read_unified_pot_file(const std::string &potf_name)
         for (int k = 1; k < np1; k++) {
           if (setflag_3b[i][j][k] != 1) {
             //i-j-k interaction not set
-
             //maybe i-j-k is mapped to some other atom type interaction?
-            //int i_mapped_to = map[i] + 1;    //+1 as map starts from 0
-            //int j_mapped_to = map[j] + 1;    //+1 as map starts from 0
-            //int k_mapped_to = map[k] + 1;    //+1 as map starts from 0
-            const int i_mapped_to = element_to_type[elements[i-1]];
-            const int j_mapped_to = element_to_type[elements[j-1]];
-            const int k_mapped_to = element_to_type[elements[k-1]];
+            const int i_mapped_to = element_to_type[elements[i]];
+            const int j_mapped_to = element_to_type[elements[j]];
+            const int k_mapped_to = element_to_type[elements[k]];
 
             if ((i_mapped_to == i) && (j_mapped_to == j) && (k_mapped_to == k))
               error->all(FLERR,
                          "UF3: Potential for interaction {}-{}-{} ie {}-{}-{} "
                          " not found in {} file",
-                         i, j, k, elements[i_mapped_to - 1], elements[j_mapped_to - 1],
-                         elements[k_mapped_to - 1], potf_name);
+                         i, j, k, elements[i_mapped_to], elements[j_mapped_to],
+                         elements[k_mapped_to], potf_name);
             if (setflag_3b[i_mapped_to][j_mapped_to][k_mapped_to] != 1)
               error->all(FLERR,
                          "UF3: Interaction {}-{}-{} was mapped to {}-{}-{}, but "
