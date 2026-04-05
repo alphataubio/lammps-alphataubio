@@ -81,39 +81,44 @@ template <class DeviceType> class PairUF3Kokkos : public PairUF3 {
   //k_cutsq
   DAT::ttransform_kkfloat_3d k_cut_3b;
   DAT::ttransform_kkfloat_4d k_min_cut_3b;
-  typename AT::t_kkfloat_3d d_cut_3b;
-  typename AT::t_kkfloat_4d d_min_cut_3b;
   template <typename TYPE> void destroy_3d(TYPE data, typename TYPE::value_type*** &array);
   template <typename TYPE> void destroy_4d(TYPE data, typename TYPE::value_type**** &array);
   Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> /*d_cutsq,*/ d_cut_3b_list;
-  //Kokkos::View<KK_FLOAT ***, LMPDeviceLayout, LMPDeviceType> d_cut_3b;
 
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_coefficients_2b;
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_dncoefficients_2b;
+  typename AT::t_int_2d map2b;
+  typename AT::t_int_3d map3b;
+  typename AT::t_kkfloat_2d d_n2b_knot;
+  typename AT::t_kkfloat_3d constants_2b, dnconstants_2b, d_cut_3b, d_n3b_knot_matrix;
+  typename AT::t_kkfloat_4d d_min_cut_3b, constants_3b, dnconstants_3b, d_coefficients_3b;
+  Kokkos::View<KK_FLOAT*****, LMPDeviceLayout, LMPDeviceType> d_dncoefficients_3b;
+
+  /*
   Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n2b_knot;
-  Kokkos::View<KK_FLOAT *, LMPDeviceLayout, LMPDeviceType> d_n2b_knot_spacings;
-  Kokkos::View<int **, LMPDeviceLayout, LMPDeviceType> map2b;
-  Kokkos::View<KK_FLOAT[4][4], LMPDeviceLayout, LMPDeviceType> constants;
-  Kokkos::View<KK_FLOAT[3][3], LMPDeviceLayout, LMPDeviceType> dnconstants;
   Kokkos::View<KK_FLOAT ***, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_matrix;
-  Kokkos::View<KK_FLOAT ****, LMPDeviceLayout, LMPDeviceType> d_coefficients_3b;
-  Kokkos::View<KK_FLOAT *****, LMPDeviceLayout, LMPDeviceType> d_dncoefficients_3b;
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_spacings;
-  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_matrix_spacings;
-  Kokkos::View<int ***, LMPDeviceLayout, LMPDeviceType> map3b;
-
   Kokkos::View<KK_FLOAT **[16], LMPDeviceLayout, LMPDeviceType> constants_2b;
   Kokkos::View<KK_FLOAT **[9], LMPDeviceLayout, LMPDeviceType> dnconstants_2b;
   Kokkos::View<KK_FLOAT ***[16], LMPDeviceLayout, LMPDeviceType> constants_3b;
   Kokkos::View<KK_FLOAT ***[9], LMPDeviceLayout, LMPDeviceType> dnconstants_3b;
+  Kokkos::View<KK_FLOAT ****, LMPDeviceLayout, LMPDeviceType> d_coefficients_3b;
+
+
+  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_coefficients_2b;
+  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_dncoefficients_2b;
+  Kokkos::View<KK_FLOAT *, LMPDeviceLayout, LMPDeviceType> d_n2b_knot_spacings;
+  Kokkos::View<KK_FLOAT[4][4], LMPDeviceLayout, LMPDeviceType> constants;
+  Kokkos::View<KK_FLOAT[3][3], LMPDeviceLayout, LMPDeviceType> dnconstants;
+
+  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_spacings;
+  Kokkos::View<KK_FLOAT **, LMPDeviceLayout, LMPDeviceType> d_n3b_knot_matrix_spacings;
 
   std::vector<double> get_constants(double *knots, double coefficient);
   std::vector<double> get_dnconstants(double *knots, double coefficient);
+  */
 
   int coefficients_created = 0;
   void create_coefficients();
-  void create_3b_coefficients();
-  void create_2b_coefficients();
+  //void create_3b_coefficients();
+  //void create_2b_coefficients();
   std::vector<double> get_coefficients(const double *knots, const double coefficient) const;
   std::vector<double> get_dncoefficients(const double *knots, const double coefficient) const;
 
@@ -149,6 +154,7 @@ template <class DeviceType> class PairUF3Kokkos : public PairUF3 {
   DAT::ttransform_kkacc_1d k_eatom;
   DAT::ttransform_kkacc_1d_6 k_vatom;
   DAT::ttransform_kkacc_1d_9 k_cvatom;
+  
   typename AT::t_kkacc_1d d_eatom;
   typename AT::t_kkacc_1d_6 d_vatom;
   typename AT::t_kkacc_1d_9 d_cvatom;
@@ -182,19 +188,8 @@ template <class DeviceType> class PairUF3Kokkos : public PairUF3 {
   friend void pair_virial_fdotr_compute<PairUF3Kokkos>(PairUF3Kokkos *);
 };
 
-// NOLINTNEXTLINE
-KOKKOS_INLINE_FUNCTION int min(int i, int j)
-{
-  return i < j ? i : j;
-}
-// NOLINTNEXTLINE
-KOKKOS_INLINE_FUNCTION int max(int i, int j)
-{
-  return i > j ? i : j;
-}
-
 }    // namespace LAMMPS_NS
 
-#endif
+#endif // !LMP_PAIR_UF3_KOKKOS_H
 #endif
 
