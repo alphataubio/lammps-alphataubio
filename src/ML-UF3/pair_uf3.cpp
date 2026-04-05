@@ -172,99 +172,80 @@ void PairUF3::compute(int eflag, int vflag)
       const double delz = ztmp - x[j][2];
       const double rsq = delx * delx + dely * dely + delz * delz;
       const int jtype = type[j];
-      if (rsq < cutsq[itype][jtype]) {
-        const double rij = sqrt(rsq);
+      if (rsq >= cutsq[itype][jtype]) continue;
+      const double rij = sqrt(rsq);
 
-        if (pot_3b) {
-          if (rij <= uf3_potential->cut_3b_list[itype][jtype]) {
-            neighshort[numshort] = j;
-            if (numshort >= maxshort - 1) {
-              maxshort += maxshort / 2;
-              memory->grow(neighshort, maxshort, "pair:neighshort");
-            }
-            numshort = numshort + 1;
+      if (pot_3b) {
+        if (rij <= uf3_potential->cut_3b_list[itype][jtype]) {
+          neighshort[numshort] = j;
+          if (numshort >= maxshort - 1) {
+            maxshort += maxshort / 2;
+            memory->grow(neighshort, maxshort, "pair:neighshort");
           }
+          numshort = numshort + 1;
         }
+      }
 
-        const int knot_start_index = uf3_potential->get_starting_index_2b(itype, jtype, rij);
-        double **cached_constants_2b_deri = uf3_potential->cached_constants_2b_deri[itype][jtype];
-        double force_2b = cached_constants_2b_deri[knot_start_index - 1][0];
-        force_2b += rij * cached_constants_2b_deri[knot_start_index - 1][1];
-        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 1][2];
-        force_2b +=       cached_constants_2b_deri[knot_start_index - 2][3];
-        force_2b += rij * cached_constants_2b_deri[knot_start_index - 2][4];
-        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 2][5];
-        force_2b +=       cached_constants_2b_deri[knot_start_index - 3][6];
-        force_2b += rij * cached_constants_2b_deri[knot_start_index - 3][7];
-        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 3][8];
+      const int knot_start_index = uf3_potential->get_starting_index_2b(itype, jtype, rij);
+      double **constants_2b_deri = &(uf3_potential->cached_constants_2b_deri[itype][jtype][knot_start_index-3]);
+      double force_2b =  constants_2b_deri[2][0] + constants_2b_deri[1][3] + constants_2b_deri[0][6];
+      force_2b += rij * (constants_2b_deri[2][1] + constants_2b_deri[1][4] + constants_2b_deri[0][7]);
+      force_2b += rsq * (constants_2b_deri[2][2] + constants_2b_deri[1][5] + constants_2b_deri[0][8]);
 
-        const double fpair = -1 * force_2b / rij;
-        const double fx = delx * fpair;
-        const double fy = dely * fpair;
-        const double fz = delz * fpair;
+      const double fpair = -1 * force_2b / rij;
+      const double fx = delx * fpair;
+      const double fy = dely * fpair;
+      const double fz = delz * fpair;
 
-        f[i][0] += fx;
-        f[i][1] += fy;
-        f[i][2] += fz;
-        f[j][0] -= fx;
-        f[j][1] -= fy;
-        f[j][2] -= fz;
+      f[i][0] += fx;
+      f[i][1] += fy;
+      f[i][2] += fz;
+      f[j][0] -= fx;
+      f[j][1] -= fy;
+      f[j][2] -= fz;
 
-        if (eflag) {
-          const double rth = rsq * rij;
-          double **cached_constants_2b = uf3_potential->cached_constants_2b[itype][jtype];
-          evdwl =        cached_constants_2b[knot_start_index    ][0];
-          evdwl += rij * cached_constants_2b[knot_start_index    ][1];
-          evdwl += rsq * cached_constants_2b[knot_start_index    ][2];
-          evdwl += rth * cached_constants_2b[knot_start_index    ][3];
-          evdwl +=       cached_constants_2b[knot_start_index - 1][4];
-          evdwl += rij * cached_constants_2b[knot_start_index - 1][5];
-          evdwl += rsq * cached_constants_2b[knot_start_index - 1][6];
-          evdwl += rth * cached_constants_2b[knot_start_index - 1][7];
-          evdwl +=       cached_constants_2b[knot_start_index - 2][8];
-          evdwl += rij * cached_constants_2b[knot_start_index - 2][9];
-          evdwl += rsq * cached_constants_2b[knot_start_index - 2][10];
-          evdwl += rth * cached_constants_2b[knot_start_index - 2][11];
-          evdwl +=       cached_constants_2b[knot_start_index - 3][12];
-          evdwl += rij * cached_constants_2b[knot_start_index - 3][13];
-          evdwl += rsq * cached_constants_2b[knot_start_index - 3][14];
-          evdwl += rth * cached_constants_2b[knot_start_index - 3][15];
-        }
+      if (eflag) {
+        const double rth = rsq * rij;
+        double **constants_2b = &(uf3_potential->cached_constants_2b[itype][jtype][knot_start_index-3]);
+        evdwl =  constants_2b[3][0] + constants_2b[2][4] + constants_2b[1][8]  + constants_2b[0][12];
+        evdwl += rij * (constants_2b[3][1] + constants_2b[2][5] + constants_2b[1][9]  + constants_2b[0][13]);
+        evdwl += rsq * (constants_2b[3][2] + constants_2b[2][6] + constants_2b[1][10] + constants_2b[0][14]);
+        evdwl += rth * (constants_2b[3][3] + constants_2b[2][7] + constants_2b[1][11] + constants_2b[0][15]);
+      }
 
-        if (evflag) {
-          ev_tally_xyz(i, j, nlocal, newton_pair, evdwl, 0.0, fx, fy, fz, delx, dely, delz);
+      if (evflag) {
+        ev_tally_xyz(i, j, nlocal, newton_pair, evdwl, 0.0, fx, fy, fz, delx, dely, delz);
 
-          // Centroid Stress
-          if (vflag_either && cvflag_atom) {
-            double v[6];
+        // Centroid Stress
+        if (vflag_either && cvflag_atom) {
+          double v[6];
 
-            v[0] = delx * fx;
-            v[1] = dely * fy;
-            v[2] = delz * fz;
-            v[3] = delx * fy;
-            v[4] = delx * fz;
-            v[5] = dely * fz;
+          v[0] = delx * fx;
+          v[1] = dely * fy;
+          v[2] = delz * fz;
+          v[3] = delx * fy;
+          v[4] = delx * fz;
+          v[5] = dely * fz;
 
-            cvatom[i][0] += 0.5 * v[0];
-            cvatom[i][1] += 0.5 * v[1];
-            cvatom[i][2] += 0.5 * v[2];
-            cvatom[i][3] += 0.5 * v[3];
-            cvatom[i][4] += 0.5 * v[4];
-            cvatom[i][5] += 0.5 * v[5];
-            cvatom[i][6] += 0.5 * v[3];
-            cvatom[i][7] += 0.5 * v[4];
-            cvatom[i][8] += 0.5 * v[5];
+          cvatom[i][0] += 0.5 * v[0];
+          cvatom[i][1] += 0.5 * v[1];
+          cvatom[i][2] += 0.5 * v[2];
+          cvatom[i][3] += 0.5 * v[3];
+          cvatom[i][4] += 0.5 * v[4];
+          cvatom[i][5] += 0.5 * v[5];
+          cvatom[i][6] += 0.5 * v[3];
+          cvatom[i][7] += 0.5 * v[4];
+          cvatom[i][8] += 0.5 * v[5];
 
-            cvatom[j][0] += 0.5 * v[0];
-            cvatom[j][1] += 0.5 * v[1];
-            cvatom[j][2] += 0.5 * v[2];
-            cvatom[j][3] += 0.5 * v[3];
-            cvatom[j][4] += 0.5 * v[4];
-            cvatom[j][5] += 0.5 * v[5];
-            cvatom[j][6] += 0.5 * v[3];
-            cvatom[j][7] += 0.5 * v[4];
-            cvatom[j][8] += 0.5 * v[5];
-          }
+          cvatom[j][0] += 0.5 * v[0];
+          cvatom[j][1] += 0.5 * v[1];
+          cvatom[j][2] += 0.5 * v[2];
+          cvatom[j][3] += 0.5 * v[3];
+          cvatom[j][4] += 0.5 * v[4];
+          cvatom[j][5] += 0.5 * v[5];
+          cvatom[j][6] += 0.5 * v[3];
+          cvatom[j][7] += 0.5 * v[4];
+          cvatom[j][8] += 0.5 * v[5];
         }
       }
     }
