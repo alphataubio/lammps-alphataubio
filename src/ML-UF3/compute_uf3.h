@@ -43,7 +43,7 @@ class ComputeUF3 : public Compute {
   int **setflag;      // 0/1 = whether each i,j has been set
 
   bool pot_3b;
-  int lastcol, ncoeff, virial_flag;
+  int lastcol, virial_flag;
   double **array_local;
 
   Compute *c_pe, *c_virial;

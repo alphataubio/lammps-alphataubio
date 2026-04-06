@@ -51,9 +51,22 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   for(int i=5; i<narg ; i++) elements_.push_back(arg[i]);
   uf3_potential = new UF3Potential(lmp, arg[4], cutsq, setflag, elements_, pot_3b);
 
+  for (int i = 1; i <= atom->ntypes; i++) {
+    for (int j = 1; j <= atom->ntypes; j++) {
+      const double cut_2b_ij = uf3_potential->cut_2b[i][j];
+      cutsq[i][j] = cut_2b_ij * cut_2b_ij;
+    }
+  }
+
+
   if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
   else size_array_rows = 1 + 3*(atom->natoms);
-  size_array_cols = ncoeff + 1;
+
+  const int ntypes = atom->ntypes;
+  size_array_cols = 1;
+  for (int i = 1; i <= ntypes; i++) {
+    for (int j = i; j <= ntypes; j++) size_array_cols += uf3_potential->n2b_coeff_array_size[i][j];
+  }
   lastcol = size_array_cols-1;
 
 }
@@ -124,17 +137,16 @@ void ComputeUF3::compute_array()
   const int* const ilist = list->ilist;
   const int* const numneigh = list->numneigh;
   int** const firstneigh = list->firstneigh;
-  int * const type = atom->type;
-  double **x = atom->x;
+  const int* const type = atom->type;
+  double** const x = atom->x;
+  const int* const mask = atom->mask;
 
   // compute uf3 derivatives for each atom in group
   // use full neighbor list to count atoms less than cutoff
 
-  const int* const mask = atom->mask;
-  const int ntypes = atom->ntypes;
 
   for (int ii = 0; ii < inum; ii++) {
-    int irow = 0;
+
     const int i = ilist[ii];
     if (!(mask[i] & groupbit)) continue;
 
@@ -142,9 +154,6 @@ void ComputeUF3::compute_array()
     const int* const jlist = firstneigh[i];
     const int jnum = numneigh[i];
     const int row_offset_i = 1 + 3*(atom->tag[i]-1);
-    const int type_offset = type_offsets.at(itype);
-
-
 
     for (int jj = 0; jj < jnum; jj++) {
       const int j = jlist[jj];
@@ -155,131 +164,65 @@ void ComputeUF3::compute_array()
       const double dely = x[i][1] - x[j][1];
       const double delz = x[i][2] - x[j][2];
       const double rsq = delx*delx + dely*dely + delz*delz;
-
-      if (rsq < cutsq[itype][jtype]) continue;
+      if (rsq >= cutsq[itype][jtype]) continue;
 
       const double rij = sqrt(rsq);
-      const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
-
-      // ENERGY
       const double rth = rsq * rij;
-      double **cached_constants_2b = uf3_potential->cached_constants_2b[itype][jtype];
-      double evdwl =        cached_constants_2b[start_idx    ][0];
-        evdwl += rij * cached_constants_2b[start_idx    ][1];
-        evdwl += rsq * cached_constants_2b[start_idx    ][2];
-        evdwl += rth * cached_constants_2b[start_idx    ][3];
-        evdwl +=       cached_constants_2b[start_idx - 1][4];
-        evdwl += rij * cached_constants_2b[start_idx - 1][5];
-        evdwl += rsq * cached_constants_2b[start_idx - 1][6];
-        evdwl += rth * cached_constants_2b[start_idx - 1][7];
-        evdwl +=       cached_constants_2b[start_idx - 2][8];
-        evdwl += rij * cached_constants_2b[start_idx - 2][9];
-        evdwl += rsq * cached_constants_2b[start_idx - 2][10];
-        evdwl += rth * cached_constants_2b[start_idx - 2][11];
-        evdwl +=       cached_constants_2b[start_idx - 3][12];
-        evdwl += rij * cached_constants_2b[start_idx - 3][13];
-        evdwl += rsq * cached_constants_2b[start_idx - 3][14];
-        evdwl += rth * cached_constants_2b[start_idx - 3][15];
+      const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
+      fprintf(stderr, "*** rsq %f start_idx %i\n", rsq, start_idx);
 
+      // ENERGY & FORCE FEATURE EXTRACTION
+      double **constants_2b = &(uf3_potential->cached_constants_2b[itype][jtype][start_idx-3]);
+      double **constants_2b_deri = &(uf3_potential->cached_constants_2b_deri[itype][jtype][start_idx-3]);
 
-      // FORCES
-      double **cached_constants_2b_deri = uf3_potential->cached_constants_2b_deri[itype][jtype];
-      double force_2b = cached_constants_2b_deri[start_idx - 1][0];
-      force_2b += rij * cached_constants_2b_deri[start_idx - 1][1];
-      force_2b += rsq * cached_constants_2b_deri[start_idx - 1][2];
-      force_2b +=       cached_constants_2b_deri[start_idx - 2][3];
-      force_2b += rij * cached_constants_2b_deri[start_idx - 2][4];
-      force_2b += rsq * cached_constants_2b_deri[start_idx - 2][5];
-      force_2b +=       cached_constants_2b_deri[start_idx - 3][6];
-      force_2b += rij * cached_constants_2b_deri[start_idx - 3][7];
-      force_2b += rsq * cached_constants_2b_deri[start_idx - 3][8];
+      // Set your column offset per interaction type (e.g., A-A vs A-B)
+      int type_offset = 0; 
 
-        const double fpair = -1 * force_2b / rij;
-        const double fx = delx * fpair;
-        const double fy = dely * fpair;
-        const double fz = delz * fpair;
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-
-
-        f[i][0] += fx;
-        f[i][1] += fy;
-        f[i][2] += fz;
-        f[j][0] -= fx;
-        f[j][1] -= fy;
-        f[j][2] -= fz;
-
-
-
-      // Pseudocode for inside the i-j neighbor loop in compute_uf3.cpp
-      double b_val[4]; // Store b_m(rij) here
-      double b_der[4]; // Store db_m/drij here
-
-      // ... [Evaluate the 4 active unweighted B-splines based on rij] ...
-
+      // Extract the 4 active basis functions directly from your pre-computed matrices
       for (int local_m = 0; local_m < 4; local_m++) {
-        const int func_ind = start_idx - 3 + local_m; // Map to global basis index
-        const int col = type_offset + func_ind;
+        const int row = local_m;
+        // 1. Energy Feature (Cubic: 4 coefficients)
+        const int col = (3 - local_m) * 4;
+        const double b_val = constants_2b[row][col]
+                           + rij * constants_2b[row][col + 1]
+                           + rsq * constants_2b[row][col + 2]
+                           + rth * constants_2b[row][col + 3];
+        // 2. Force Feature (Derivative of the cubic: C1 + 2*C2*r + 3*C3*r^2)
+        // We use constants_2b here to guarantee we get all 4 components without a segfault.
+        const double b_der = constants_2b[row][col + 1]
+                           + 2.0 * rij * constants_2b[row][col + 2]
+                           + 3.0 * rsq * constants_2b[row][col + 3];
+        // Map to the global array column
+        const int func_ind = start_idx - 3 + local_m; 
+        const int col_offset = type_offset + func_ind;
+        // Boundary check
+        fprintf(stderr, "*** b_val %f b_der %f col %i lastcol %i\n", b_val, b_der, col, lastcol);
+        if (col_offset < 0 || col_offset >= lastcol) continue;
 
-        // 1. Energy Feature
-        array_local[0][col] += 0.5 * b_val[local_m]; // 0.5 to avoid double counting if full neighbor list
 
-        // 2. Force Features
-        const double force_factor = -b_der[local_m] / rij;
+        // --- POPULATE FEATURE MATRIX ---
+        array_local[0][col_offset] += 0.5 * b_val;
+        const double force_factor = -b_der / rij;
         const double fx_feature = delx * force_factor;
         const double fy_feature = dely * force_factor;
         const double fz_feature = delz * force_factor;
+        array_local[row_offset_i    ][col_offset] += fx_feature;
+        array_local[row_offset_i + 1][col_offset] += fy_feature;
+        array_local[row_offset_i + 2][col_offset] += fz_feature;
+        array_local[row_offset_j    ][col_offset] -= fx_feature;
+        array_local[row_offset_j + 1][col_offset] -= fy_feature;
+        array_local[row_offset_j + 2][col_offset] -= fz_feature;
 
-        double **cached_constants_2b_deri = uf3_potential->cached_constants_2b_deri[itype][jtype];
-        double force_2b = cached_constants_2b_deri[knot_start_index - 1][0];
-        force_2b += rij * cached_constants_2b_deri[knot_start_index - 1][1];
-        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 1][2];
-        force_2b +=       cached_constants_2b_deri[knot_start_index - 2][3];
-        force_2b += rij * cached_constants_2b_deri[knot_start_index - 2][4];
-        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 2][5];
-        force_2b +=       cached_constants_2b_deri[knot_start_index - 3][6];
-        force_2b += rij * cached_constants_2b_deri[knot_start_index - 3][7];
-        force_2b += rsq * cached_constants_2b_deri[knot_start_index - 3][8];
-
-        const double fpair = -1 * force_2b / rij;
-        const double fx = delx * fpair;
-        const double fy = dely * fpair;
-        const double fz = delz * fpair;
-        
-        array_local[row_offset_i    ][col] += fx_feature;
-        array_local[row_offset_i + 1][col] += fy_feature;
-        array_local[row_offset_i + 2][col] += fz_feature;
-    
-        array_local[row_offset_j    ][col] -= fx_feature;
-        array_local[row_offset_j + 1][col] -= fy_feature;
-        array_local[row_offset_j + 2][col] -= fz_feature;
-
-
-
-        // 3. Virial Features (if requested)
+        // Virials (If requested)
         if (virial_flag) {
-          array_local[size_array_rows-6][col] += delx * fx_feature; // W_xx
-          array_local[size_array_rows-5][col] += dely * fy_feature; // W_yy
-          array_local[size_array_rows-4][col] += delz * fz_feature; // W_zz
-          array_local[size_array_rows-3][col] += delz * fy_feature; // W_zy
-          array_local[size_array_rows-2][col] += delz * fx_feature; // W_zx
-          array_local[size_array_rows-1][col] += dely * fx_feature; // W_yx
+          array_local[size_array_rows-6][col_offset] += delx * fx_feature; // W_xx
+          array_local[size_array_rows-5][col_offset] += dely * fy_feature; // W_yy
+          array_local[size_array_rows-4][col_offset] += delz * fz_feature; // W_zz
+          array_local[size_array_rows-3][col_offset] += delz * fy_feature; // W_zy
+          array_local[size_array_rows-2][col_offset] += delz * fx_feature; // W_zx
+          array_local[size_array_rows-1][col_offset] += dely * fx_feature; // W_yx
         }
-
-        */
-
+      }
     } // loop over jj inside
   } // for ii loop
 
