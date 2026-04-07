@@ -44,6 +44,8 @@ class ComputeUF3 : public Compute {
 
   bool pot_3b;
   int lastcol, virial_flag;
+
+  int **type_offset_2b, *type_offset_3b;
   double **array_local;
 
   Compute *c_pe, *c_virial;

@@ -49,26 +49,38 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   const int np1 = atom->ntypes + 1;
   memory->create(setflag, np1, np1, "uf3:setflag");
   memory->create(cutsq, np1, np1, "uf3:cutsq");
-  if (pot_3b) memory->create(neighshort, maxshort, "uf3:neighshort");
+  if (pot_3b) {
+    memory->create(neighshort, maxshort, "uf3:neighshort");
+    memory->create(cutsq, np1, np1, "uf3:cutsq");
+  }
 
   std::vector<std::string> elements_(1); // blank [0] to use ntypes+1;
   for(int i=5; i<narg ; i++) elements_.push_back(arg[i]);
   uf3_potential = new UF3Potential(lmp, arg[4], cutsq, setflag, elements_, pot_3b);
+  memory->create(type_offset_2b, np1, np1, "uf3:type_offset_2b");
+  memory->create(type_offset_3b, uf3_potential->tot_interaction_count_3b, "uf3:type_offset_3b");
 
   if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
   else size_array_rows = 1 + 3*(atom->natoms);
 
-  size_array_cols = 1; // last column is regression b vector
+  size_array_cols = 0;
   const int ntypes = atom->ntypes;
   for (int i = 1; i <= ntypes; i++) {
-    for (int j = 1; j <= ntypes; j++) {
+    for (int j = i; j <= ntypes; j++) {
       const double cut_2b_ij = uf3_potential->cut_2b[i][j];
       cutsq[i][j] = cut_2b_ij * cut_2b_ij;
+      type_offset_2b[i][j] = type_offset_2b[j][i] = size_array_cols;
       size_array_cols += uf3_potential->n2b_coeff_array_size[i][j];
       //fprintf(stderr, "*** n2b_coeff_array_size[%i][%i] %i\n", i, j, uf3_potential->n2b_coeff_array_size[i][j]);
-      if (pot_3b) {
-        for (int k = 1; k <= ntypes; k++) {
+    }
+  }
+
+  if (pot_3b) {
+    for (int i = 1; i <= ntypes; i++) {
+      for (int j = i; j <= ntypes; j++) {
+        for (int k = j; k <= ntypes; k++) {
           const int map_to = uf3_potential->map_3b[i][j][k];
+          type_offset_3b[map_to] = size_array_cols;
           size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][0];
           size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][1];
           size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][2];
@@ -78,6 +90,8 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
       }
     }
   }
+
+  size_array_cols++; // last column is regression b vector
   //fprintf(stderr, "*** size_array_cols %i\n", size_array_cols);
   lastcol = size_array_cols-1;
 
@@ -89,7 +103,11 @@ ComputeUF3::~ComputeUF3()
 {
   memory->destroy(setflag);
   memory->destroy(cutsq);
-  if (pot_3b) memory->destroy(neighshort);
+  memory->destroy(type_offset_2b);
+  if (pot_3b) {
+    memory->destroy(neighshort);
+    memory->destroy(type_offset_3b);
+  }
   memory->destroy(array_local);
   memory->destroy(array);
   if( virial_flag && modify->find_compute(id_virial) != -1 ) modify->delete_compute(id_virial);
@@ -187,13 +205,10 @@ void ComputeUF3::compute_array()
       double **constants_2b = &(uf3_potential->cached_constants_2b[itype][jtype][start_idx-3]);
       double **constants_2b_deri = &(uf3_potential->cached_constants_2b_deri[itype][jtype][start_idx-3]);
 
-      // Set your column offset per interaction type (e.g., A-A vs A-B)
-      int type_offset = 0; 
-
       // Extract the 4 active basis functions directly from your pre-computed matrices
       for (int m = 0; m < 4; m++) {
         // map knot segment (start_idx-3)+m to WW column matching external tables (1-based segment index)
-        const int col_offset = type_offset + m + start_idx - 3;
+        const int col_offset = type_offset_2b[itype][jtype] + m + start_idx - 3;
         if ( col_offset < leading_trim || col_offset > size_array_cols-trailing_trim-3 ) continue;
         // 1. Energy Feature (Cubic: 4 coefficients)
         const int n = (3 - m) * 4;
