@@ -28,6 +28,10 @@
 
 using namespace LAMMPS_NS;
 
+static constexpr int leading_trim = 3;
+// allow column index (n_WW - 1 - trailing_trim), e.g. four active bases up to WW8 when size is 11
+static constexpr int trailing_trim = 2;
+
 ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
     Compute(lmp, narg, arg), list(nullptr), array_local(nullptr),
     c_pe(nullptr), c_virial(nullptr)
@@ -51,22 +55,30 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   for(int i=5; i<narg ; i++) elements_.push_back(arg[i]);
   uf3_potential = new UF3Potential(lmp, arg[4], cutsq, setflag, elements_, pot_3b);
 
-  for (int i = 1; i <= atom->ntypes; i++) {
-    for (int j = 1; j <= atom->ntypes; j++) {
-      const double cut_2b_ij = uf3_potential->cut_2b[i][j];
-      cutsq[i][j] = cut_2b_ij * cut_2b_ij;
-    }
-  }
-
-
   if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
   else size_array_rows = 1 + 3*(atom->natoms);
 
+  size_array_cols = 1; // last column is regression b vector
   const int ntypes = atom->ntypes;
-  size_array_cols = 1;
   for (int i = 1; i <= ntypes; i++) {
-    for (int j = i; j <= ntypes; j++) size_array_cols += uf3_potential->n2b_coeff_array_size[i][j];
+    for (int j = 1; j <= ntypes; j++) {
+      const double cut_2b_ij = uf3_potential->cut_2b[i][j];
+      cutsq[i][j] = cut_2b_ij * cut_2b_ij;
+      size_array_cols += uf3_potential->n2b_coeff_array_size[i][j];
+      //fprintf(stderr, "*** n2b_coeff_array_size[%i][%i] %i\n", i, j, uf3_potential->n2b_coeff_array_size[i][j]);
+      if (pot_3b) {
+        for (int k = 1; k <= ntypes; k++) {
+          const int map_to = uf3_potential->map_3b[i][j][k];
+          size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][0];
+          size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][1];
+          size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][2];
+
+          //fprintf(stderr, "*** map_3b[%i][%i][%i] %i n3b_coeff_array_size[map_to] %i %i %i\n", i, j, k, map_to, uf3_potential->n3b_coeff_array_size[map_to][0], uf3_potential->n3b_coeff_array_size[map_to][1], uf3_potential->n3b_coeff_array_size[map_to][2]);
+        }
+      }
+    }
   }
+  //fprintf(stderr, "*** size_array_cols %i\n", size_array_cols);
   lastcol = size_array_cols-1;
 
 }
@@ -169,7 +181,7 @@ void ComputeUF3::compute_array()
       const double rij = sqrt(rsq);
       const double rth = rsq * rij;
       const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
-      fprintf(stderr, "*** rsq %f start_idx %i\n", rsq, start_idx);
+      //fprintf(stderr, "*** rsq %f start_idx %i x[%i] %f %f %f x[%i] %f %f %f\n", rsq, start_idx, i, x[i][0], x[i][1], x[i][2], j, x[j][0], x[j][1], x[j][2]);
 
       // ENERGY & FORCE FEATURE EXTRACTION
       double **constants_2b = &(uf3_potential->cached_constants_2b[itype][jtype][start_idx-3]);
@@ -179,39 +191,28 @@ void ComputeUF3::compute_array()
       int type_offset = 0; 
 
       // Extract the 4 active basis functions directly from your pre-computed matrices
-      for (int local_m = 0; local_m < 4; local_m++) {
-        const int row = local_m;
+      for (int m = 0; m < 4; m++) {
+        // map knot segment (start_idx-3)+m to WW column matching external tables (1-based segment index)
+        const int col_offset = type_offset + m + start_idx - 3;
+        if ( col_offset < leading_trim || col_offset > size_array_cols-trailing_trim-3 ) continue;
         // 1. Energy Feature (Cubic: 4 coefficients)
-        const int col = (3 - local_m) * 4;
-        const double b_val = constants_2b[row][col]
-                           + rij * constants_2b[row][col + 1]
-                           + rsq * constants_2b[row][col + 2]
-                           + rth * constants_2b[row][col + 3];
+        const int n = (3 - m) * 4;
+        array_local[0][col_offset] +=         constants_2b[m][n]
+                                      + rij * constants_2b[m][n+1]
+                                      + rsq * constants_2b[m][n+2]
+                                      + rth * constants_2b[m][n+3];
         // 2. Force Feature (Derivative of the cubic: C1 + 2*C2*r + 3*C3*r^2)
-        // We use constants_2b here to guarantee we get all 4 components without a segfault.
-        const double b_der = constants_2b[row][col + 1]
-                           + 2.0 * rij * constants_2b[row][col + 2]
-                           + 3.0 * rsq * constants_2b[row][col + 3];
-        // Map to the global array column
-        const int func_ind = start_idx - 3 + local_m; 
-        const int col_offset = type_offset + func_ind;
-        // Boundary check
-        fprintf(stderr, "*** b_val %f b_der %f col %i lastcol %i\n", b_val, b_der, col, lastcol);
-        if (col_offset < 0 || col_offset >= lastcol) continue;
-
-
-        // --- POPULATE FEATURE MATRIX ---
-        array_local[0][col_offset] += 0.5 * b_val;
+        const double b_der = constants_2b[m][n+1] + 2.0 * rij * constants_2b[m][n+2] + 3.0 * rsq * constants_2b[m][n+3];
         const double force_factor = -b_der / rij;
         const double fx_feature = delx * force_factor;
         const double fy_feature = dely * force_factor;
         const double fz_feature = delz * force_factor;
-        array_local[row_offset_i    ][col_offset] += fx_feature;
-        array_local[row_offset_i + 1][col_offset] += fy_feature;
-        array_local[row_offset_i + 2][col_offset] += fz_feature;
-        array_local[row_offset_j    ][col_offset] -= fx_feature;
-        array_local[row_offset_j + 1][col_offset] -= fy_feature;
-        array_local[row_offset_j + 2][col_offset] -= fz_feature;
+        array_local[row_offset_i  ][col_offset] += fx_feature;
+        array_local[row_offset_i+1][col_offset] += fy_feature;
+        array_local[row_offset_i+2][col_offset] += fz_feature;
+        array_local[row_offset_j  ][col_offset] -= fx_feature;
+        array_local[row_offset_j+1][col_offset] -= fy_feature;
+        array_local[row_offset_j+2][col_offset] -= fz_feature;
 
         // Virials (If requested)
         if (virial_flag) {
