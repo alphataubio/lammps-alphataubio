@@ -276,278 +276,206 @@ void PairUF3::compute(int eflag, int vflag)
         del_rki[2] = x[k][2] - ztmp;
         const double rik_sq = (del_rki[0] * del_rki[0]) + (del_rki[1] * del_rki[1]) + (del_rki[2] * del_rki[2]);
         const double rik = sqrt(rik_sq);
+        auto cut_3b_i = uf3_potential->cut_3b[itype];
+        auto min_cut_3b_ijk = uf3_potential->min_cut_3b[itype][jtype][ktype];
+        if ( rij > cut_3b_i[jtype][ktype] || rij < min_cut_3b_ijk[2] ) continue;
+        if ( rik > cut_3b_i[ktype][jtype] || rik < min_cut_3b_ijk[1] ) continue;
 
-        if ((rij <= uf3_potential->cut_3b[itype][jtype][ktype]) &&
-            (rik <= uf3_potential->cut_3b[itype][ktype][jtype]) &&
-            (rij >= uf3_potential->min_cut_3b[itype][jtype][ktype][2]) &&
-            (rik >= uf3_potential->min_cut_3b[itype][jtype][ktype][1])) {
+        del_rkj[0] = x[k][0] - x[j][0];
+        del_rkj[1] = x[k][1] - x[j][1];
+        del_rkj[2] = x[k][2] - x[j][2];
+        const double rjk_sq =(del_rkj[0] * del_rkj[0]) + (del_rkj[1] * del_rkj[1]) + (del_rkj[2] * del_rkj[2]);
+        const double rjk = sqrt(rjk_sq);
+        if (rjk < min_cut_3b_ijk[0]) continue;
 
-          del_rkj[0] = x[k][0] - x[j][0];
-          del_rkj[1] = x[k][1] - x[j][1];
-          del_rkj[2] = x[k][2] - x[j][2];
+        const double rij_th = rij * rij_sq;
+        const double rik_th = rik * rik_sq;
+        const double rjk_th = rjk * rjk_sq;
 
-          const double rjk_sq =(del_rkj[0] * del_rkj[0]) + (del_rkj[1] * del_rkj[1]) + (del_rkj[2] * del_rkj[2]);
-          const double rjk = sqrt(rjk_sq);
+        const int map_to = uf3_potential->map_3b[itype][jtype][ktype];
+        double ***cached_constants_3b = uf3_potential->cached_constants_3b[map_to];
+        double ***cached_constants_3b_deri = uf3_potential->cached_constants_3b_deri[map_to];
+        const int iknot_ij = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rij, 2) - 3;
+        const int iknot_ik = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rik, 1) - 3;
+        const int iknot_jk = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rjk, 0) - 3;
+        double basis_ij[4], basis_ik[4], basis_jk[4], basis_ij_der[3], basis_ik_der[3], basis_jk_der[3];
 
-          if (rjk >= uf3_potential->min_cut_3b[itype][jtype][ktype][0]) {
-            const double rij_th = rij * rij_sq;
-            const double rik_th = rik * rik_sq;
-            const double rjk_th = rjk * rjk_sq;
+        // -------- basis_ij --------
+        auto cc_3b_ij = &(cached_constants_3b[0][iknot_ij]);
+        basis_ij[0] = cc_3b_ij[0][12] + rij * cc_3b_ij[0][13] + rij_sq * cc_3b_ij[0][14] + rij_th * cc_3b_ij[0][15];
+        basis_ij[1] = cc_3b_ij[1][8]  + rij * cc_3b_ij[1][9]  + rij_sq * cc_3b_ij[1][10] + rij_th * cc_3b_ij[1][11];
+        basis_ij[2] = cc_3b_ij[2][4]  + rij * cc_3b_ij[2][5]  + rij_sq * cc_3b_ij[2][6]  + rij_th * cc_3b_ij[2][7];
+        basis_ij[3] = cc_3b_ij[3][0]  + rij * cc_3b_ij[3][1]  + rij_sq * cc_3b_ij[3][2]  + rij_th * cc_3b_ij[3][3];
 
-            const int map_to = uf3_potential->map_3b[itype][jtype][ktype];
-            double ***cached_constants_3b = uf3_potential->cached_constants_3b[map_to];
-            double ***cached_constants_3b_deri = uf3_potential->cached_constants_3b_deri[map_to];
+        // -------- basis_ik --------
+        auto cc_3b_ik = &(cached_constants_3b[1][iknot_ik]);
+        basis_ik[0] = cc_3b_ik[0][12] + rik * cc_3b_ik[0][13] + rik_sq * cc_3b_ik[0][14] + rik_th * cc_3b_ik[0][15];
+        basis_ik[1] = cc_3b_ik[1][8]  + rik * cc_3b_ik[1][9]  + rik_sq * cc_3b_ik[1][10] + rik_th * cc_3b_ik[1][11];
+        basis_ik[2] = cc_3b_ik[2][4]  + rik * cc_3b_ik[2][5]  + rik_sq * cc_3b_ik[2][6]  + rik_th * cc_3b_ik[2][7];
+        basis_ik[3] = cc_3b_ik[3][0]  + rik * cc_3b_ik[3][1]  + rik_sq * cc_3b_ik[3][2]  + rik_th * cc_3b_ik[3][3];
 
-            const int knot_start_index_ij = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rij, 2);
-            const int knot_start_index_ik = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rik, 1);
-            const int knot_start_index_jk = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rjk, 0);
-            double basis_ij[4], basis_ik[4], basis_jk[4], basis_ij_der[3], basis_ik_der[3], basis_jk_der[3];
+        // -------- basis_jk --------
+        auto cc_3b_jk = &(cached_constants_3b[2][iknot_jk]);
+        basis_jk[0] = cc_3b_jk[0][12] + rjk * cc_3b_jk[0][13] + rjk_sq * cc_3b_jk[0][14] + rjk_th * cc_3b_jk[0][15];
+        basis_jk[1] = cc_3b_jk[1][8]  + rjk * cc_3b_jk[1][9]  + rjk_sq * cc_3b_jk[1][10] + rjk_th * cc_3b_jk[1][11];
+        basis_jk[2] = cc_3b_jk[2][4]  + rjk * cc_3b_jk[2][5]  + rjk_sq * cc_3b_jk[2][6]  + rjk_th * cc_3b_jk[2][7];
+        basis_jk[3] = cc_3b_jk[3][0]  + rjk * cc_3b_jk[3][1]  + rjk_sq * cc_3b_jk[3][2]  + rjk_th * cc_3b_jk[3][3];
 
-            //--------------basis_ij
-            basis_ij[0] =           cached_constants_3b[0][knot_start_index_ij - 3][12];
-            basis_ij[0] += rij    * cached_constants_3b[0][knot_start_index_ij - 3][13];
-            basis_ij[0] += rij_sq * cached_constants_3b[0][knot_start_index_ij - 3][14];
-            basis_ij[0] += rij_th * cached_constants_3b[0][knot_start_index_ij - 3][15];
+        // -------- basis_ij_der --------
+        auto cc_3b_deri_ij = &(cached_constants_3b_deri[0][iknot_ij]);
+        basis_ij_der[0] = cc_3b_deri_ij[0][6] + rij * cc_3b_deri_ij[0][7] + rij_sq * cc_3b_deri_ij[0][8];
+        basis_ij_der[1] = cc_3b_deri_ij[1][3] + rij * cc_3b_deri_ij[1][4] + rij_sq * cc_3b_deri_ij[1][5];
+        basis_ij_der[2] = cc_3b_deri_ij[2][0] + rij * cc_3b_deri_ij[2][1] + rij_sq * cc_3b_deri_ij[2][2];
 
-            basis_ij[1] =           cached_constants_3b[0][knot_start_index_ij - 2][8];
-            basis_ij[1] += rij    * cached_constants_3b[0][knot_start_index_ij - 2][9];
-            basis_ij[1] += rij_sq * cached_constants_3b[0][knot_start_index_ij - 2][10];
-            basis_ij[1] += rij_th * cached_constants_3b[0][knot_start_index_ij - 2][11];
+        // -------- basis_ik_der --------
+        auto cc_3b_deri_ik = &(cached_constants_3b_deri[1][iknot_ik]);
+        basis_ik_der[0] = cc_3b_deri_ik[0][6] + rik * cc_3b_deri_ik[0][7] + rik_sq * cc_3b_deri_ik[0][8];
+        basis_ik_der[1] = cc_3b_deri_ik[1][3] + rik * cc_3b_deri_ik[1][4] + rik_sq * cc_3b_deri_ik[1][5];
+        basis_ik_der[2] = cc_3b_deri_ik[2][0] + rik * cc_3b_deri_ik[2][1] + rik_sq * cc_3b_deri_ik[2][2];
 
-            basis_ij[2] =           cached_constants_3b[0][knot_start_index_ij - 1][4];
-            basis_ij[2] += rij    * cached_constants_3b[0][knot_start_index_ij - 1][5];
-            basis_ij[2] += rij_sq * cached_constants_3b[0][knot_start_index_ij - 1][6];
-            basis_ij[2] += rij_th * cached_constants_3b[0][knot_start_index_ij - 1][7];
+        // -------- basis_jk_der --------
+        auto cc_3b_deri_jk = &(cached_constants_3b_deri[2][iknot_jk]);
+        basis_jk_der[0] = cc_3b_deri_jk[0][6] + rjk * cc_3b_deri_jk[0][7] + rjk_sq * cc_3b_deri_jk[0][8];
+        basis_jk_der[1] = cc_3b_deri_jk[1][3] + rjk * cc_3b_deri_jk[1][4] + rjk_sq * cc_3b_deri_jk[1][5];
+        basis_jk_der[2] = cc_3b_deri_jk[2][0] + rjk * cc_3b_deri_jk[2][1] + rjk_sq * cc_3b_deri_jk[2][2];
 
-            basis_ij[3] =           cached_constants_3b[0][knot_start_index_ij    ][0];
-            basis_ij[3] += rij    * cached_constants_3b[0][knot_start_index_ij    ][1];
-            basis_ij[3] += rij_sq * cached_constants_3b[0][knot_start_index_ij    ][2];
-            basis_ij[3] += rij_th * cached_constants_3b[0][knot_start_index_ij    ][3];
+        double triangle_eval1 = 0.0;
+        for (int l = 0; l < 3; l++) {
+          const double basis_ij_der_i = basis_ij_der[l];
+          for (int m = 0; m < 4; m++) {
+            const double factor = basis_ij_der_i * basis_ik[m];
+            double *slice = &(uf3_potential->coeff_for_der_ij[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
+            const double tmp0 = slice[0] * basis_jk[0];
+            const double tmp1 = slice[1] * basis_jk[1];
+            const double tmp2 = slice[2] * basis_jk[2];
+            const double tmp3 = slice[3] * basis_jk[3];
+            triangle_eval1 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
+          }
+        }
 
-            //--------------basis_ik
-            basis_ik[0] =           cached_constants_3b[1][knot_start_index_ik - 3][12];
-            basis_ik[0] += rik    * cached_constants_3b[1][knot_start_index_ik - 3][13];
-            basis_ik[0] += rik_sq * cached_constants_3b[1][knot_start_index_ik - 3][14];
-            basis_ik[0] += rik_th * cached_constants_3b[1][knot_start_index_ik - 3][15];
+        double triangle_eval2 = 0.0;
+        for (int l = 0; l < 4; l++) {
+          const double basis_ij_i = basis_ij[l];
+          for (int m = 0; m < 3; m++) {
+            const double factor = basis_ij_i * basis_ik_der[m];
+            double *slice = &(uf3_potential->coeff_for_der_ik[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
+            const double tmp0 = slice[0] * basis_jk[0];
+            const double tmp1 = slice[1] * basis_jk[1];
+            const double tmp2 = slice[2] * basis_jk[2];
+            const double tmp3 = slice[3] * basis_jk[3];
+            triangle_eval2 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
+          }
+        }
 
-            basis_ik[1] =           cached_constants_3b[1][knot_start_index_ik - 2][8];
-            basis_ik[1] += rik    * cached_constants_3b[1][knot_start_index_ik - 2][9];
-            basis_ik[1] += rik_sq * cached_constants_3b[1][knot_start_index_ik - 2][10];
-            basis_ik[1] += rik_th * cached_constants_3b[1][knot_start_index_ik - 2][11];
+        double triangle_eval3 = 0.0;
+        for (int l = 0; l < 4; l++) {
+          const double basis_ij_i = basis_ij[l];
+          for (int m = 0; m < 4; m++) {
+            const double factor = basis_ij_i * basis_ik[m];
+            double *slice = &(uf3_potential->coeff_for_der_jk[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
+            const double tmp0 = slice[0] * basis_jk_der[0];
+            const double tmp1 = slice[1] * basis_jk_der[1];
+            const double tmp2 = slice[2] * basis_jk_der[2];
+            triangle_eval3 += factor * (tmp0 + tmp1 + tmp2);
+          }
+        }
 
-            basis_ik[2] =           cached_constants_3b[1][knot_start_index_ik - 1][4];
-            basis_ik[2] += rik    * cached_constants_3b[1][knot_start_index_ik - 1][5];
-            basis_ik[2] += rik_sq * cached_constants_3b[1][knot_start_index_ik - 1][6];
-            basis_ik[2] += rik_th * cached_constants_3b[1][knot_start_index_ik - 1][7];
+        const double fij0 = triangle_eval1 * del_rji[0] / rij;
+        const double fik0 = triangle_eval2 * del_rki[0] / rik;
+        const double fjk0 = triangle_eval3 * del_rkj[0] / rjk;
 
-            basis_ik[3] =           cached_constants_3b[1][knot_start_index_ik    ][0];
-            basis_ik[3] += rik    * cached_constants_3b[1][knot_start_index_ik    ][1];
-            basis_ik[3] += rik_sq * cached_constants_3b[1][knot_start_index_ik    ][2];
-            basis_ik[3] += rik_th * cached_constants_3b[1][knot_start_index_ik    ][3];
+        const double fij1 = triangle_eval1 * del_rji[1] / rij;
+        const double fik1 = triangle_eval2 * del_rki[1] / rik;
+        const double fjk1 = triangle_eval3 * del_rkj[1] / rjk;
 
-            //--------------basis_jk
-            basis_jk[0] =           cached_constants_3b[2][knot_start_index_jk - 3][12];
-            basis_jk[0] += rjk    * cached_constants_3b[2][knot_start_index_jk - 3][13];
-            basis_jk[0] += rjk_sq * cached_constants_3b[2][knot_start_index_jk - 3][14];
-            basis_jk[0] += rjk_th * cached_constants_3b[2][knot_start_index_jk - 3][15];
+        const double fij2 = triangle_eval1 * del_rji[2] / rij;
+        const double fik2 = triangle_eval2 * del_rki[2] / rik;
+        const double fjk2 = triangle_eval3 * del_rkj[2] / rjk;
 
-            basis_jk[1] =           cached_constants_3b[2][knot_start_index_jk - 2][8];
-            basis_jk[1] += rjk    * cached_constants_3b[2][knot_start_index_jk - 2][9];
-            basis_jk[1] += rjk_sq * cached_constants_3b[2][knot_start_index_jk - 2][10];
-            basis_jk[1] += rjk_th * cached_constants_3b[2][knot_start_index_jk - 2][11];
+        double Fi[3], Fj[3], Fk[3];
 
-            basis_jk[2] =           cached_constants_3b[2][knot_start_index_jk - 1][4];
-            basis_jk[2] += rjk    * cached_constants_3b[2][knot_start_index_jk - 1][5];
-            basis_jk[2] += rjk_sq * cached_constants_3b[2][knot_start_index_jk - 1][6];
-            basis_jk[2] += rjk_th * cached_constants_3b[2][knot_start_index_jk - 1][7];
+        Fi[0] = fij0 + fik0;
+        Fi[1] = fij1 + fik1;
+        Fi[2] = fij2 + fik2;
+        f[i][0] += Fi[0];
+        f[i][1] += Fi[1];
+        f[i][2] += Fi[2];
 
-            basis_jk[3] =           cached_constants_3b[2][knot_start_index_jk    ][0];
-            basis_jk[3] += rjk    * cached_constants_3b[2][knot_start_index_jk    ][1];
-            basis_jk[3] += rjk_sq * cached_constants_3b[2][knot_start_index_jk    ][2];
-            basis_jk[3] += rjk_th * cached_constants_3b[2][knot_start_index_jk    ][3];
+        Fj[0] = -fij0 + fjk0;
+        Fj[1] = -fij1 + fjk1;
+        Fj[2] = -fij2 + fjk2;
+        f[j][0] += Fj[0];
+        f[j][1] += Fj[1];
+        f[j][2] += Fj[2];
 
-            //----------------basis_ij_der
-            basis_ij_der[0] =           cached_constants_3b_deri[0][knot_start_index_ij - 3][6];
-            basis_ij_der[0] += rij    * cached_constants_3b_deri[0][knot_start_index_ij - 3][7];
-            basis_ij_der[0] += rij_sq * cached_constants_3b_deri[0][knot_start_index_ij - 3][8];
+        Fk[0] = -(fik0 + fjk0);
+        Fk[1] = -(fik1 + fjk1);
+        Fk[2] = -(fik2 + fjk2);
+        f[k][0] += Fk[0];
+        f[k][1] += Fk[1];
+        f[k][2] += Fk[2];
 
-            basis_ij_der[1] =           cached_constants_3b_deri[0][knot_start_index_ij - 2][3];
-            basis_ij_der[1] += rij    * cached_constants_3b_deri[0][knot_start_index_ij - 2][4];
-            basis_ij_der[1] += rij_sq * cached_constants_3b_deri[0][knot_start_index_ij - 2][5];
-
-            basis_ij_der[2] =           cached_constants_3b_deri[0][knot_start_index_ij - 1][0];
-            basis_ij_der[2] += rij    * cached_constants_3b_deri[0][knot_start_index_ij - 1][1];
-            basis_ij_der[2] += rij_sq * cached_constants_3b_deri[0][knot_start_index_ij - 1][2];
-
-            //----------------basis_ik_der
-            basis_ik_der[0] =           cached_constants_3b_deri[1][knot_start_index_ik - 3][6];
-            basis_ik_der[0] += rik    * cached_constants_3b_deri[1][knot_start_index_ik - 3][7];
-            basis_ik_der[0] += rik_sq * cached_constants_3b_deri[1][knot_start_index_ik - 3][8];
-
-            basis_ik_der[1] =           cached_constants_3b_deri[1][knot_start_index_ik - 2][3];
-            basis_ik_der[1] += rik    * cached_constants_3b_deri[1][knot_start_index_ik - 2][4];
-            basis_ik_der[1] += rik_sq * cached_constants_3b_deri[1][knot_start_index_ik - 2][5];
-
-            basis_ik_der[2] =           cached_constants_3b_deri[1][knot_start_index_ik - 1][0];
-            basis_ik_der[2] += rik    * cached_constants_3b_deri[1][knot_start_index_ik - 1][1];
-            basis_ik_der[2] += rik_sq * cached_constants_3b_deri[1][knot_start_index_ik - 1][2];
-
-            //----------------basis_jk_der
-            basis_jk_der[0] =           cached_constants_3b_deri[2][knot_start_index_jk - 3][6];
-            basis_jk_der[0] += rjk    * cached_constants_3b_deri[2][knot_start_index_jk - 3][7];
-            basis_jk_der[0] += rjk_sq * cached_constants_3b_deri[2][knot_start_index_jk - 3][8];
-
-            basis_jk_der[1] =           cached_constants_3b_deri[2][knot_start_index_jk - 2][3];
-            basis_jk_der[1] += rjk    * cached_constants_3b_deri[2][knot_start_index_jk - 2][4];
-            basis_jk_der[1] += rjk_sq * cached_constants_3b_deri[2][knot_start_index_jk - 2][5];
-
-            basis_jk_der[2] =           cached_constants_3b_deri[2][knot_start_index_jk - 1][0];
-            basis_jk_der[2] += rjk    * cached_constants_3b_deri[2][knot_start_index_jk - 1][1];
-            basis_jk_der[2] += rjk_sq * cached_constants_3b_deri[2][knot_start_index_jk - 1][2];
-
-            double triangle_eval0 = 0.0;
-            double triangle_eval1 = 0.0;
-            double triangle_eval2 = 0.0;
-            double triangle_eval3 = 0.0;
-            const int iknot_ij = knot_start_index_ij - 3;
-            const int iknot_ik = knot_start_index_ik - 3;
-            const int iknot_jk = knot_start_index_jk - 3;
-
-            for (int l = 0; l < 3; l++) {
-              const double basis_ij_der_i = basis_ij_der[l];
-              for (int m = 0; m < 4; m++) {
-                const double factor = basis_ij_der_i * basis_ik[m];
-                double *slice = &(uf3_potential->coeff_for_der_ij[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                const double tmp0 = slice[0] * basis_jk[0];
-                const double tmp1 = slice[1] * basis_jk[1];
-                const double tmp2 = slice[2] * basis_jk[2];
-                const double tmp3 = slice[3] * basis_jk[3];
-                triangle_eval1 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
-              }
+        if (eflag) {
+          double triangle_eval0 = 0.0;
+          for (int l = 0; l < 4; l++) {
+            const double basis_ij_i = basis_ij[l];
+            for (int m = 0; m < 4; m++) {
+              const double factor = basis_ij_i * basis_ik[m];
+              const double *slice =
+                &(uf3_potential->n3b_coeff_array[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
+              const double tmp0 = slice[0] * basis_jk[0];
+              const double tmp1 = slice[1] * basis_jk[1];
+              const double tmp2 = slice[2] * basis_jk[2];
+              const double tmp3 = slice[3] * basis_jk[3];
+              triangle_eval0 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
             }
+          }
+          evdwl = triangle_eval0;
+        }
 
-            for (int l = 0; l < 4; l++) {
-              const double basis_ij_i = basis_ij[l];
-              for (int m = 0; m < 3; m++) {
-                const double factor = basis_ij_i * basis_ik_der[m];
-                double *slice = &(uf3_potential->coeff_for_der_ik[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                const double tmp0 = slice[0] * basis_jk[0];
-                const double tmp1 = slice[1] * basis_jk[1];
-                const double tmp2 = slice[2] * basis_jk[2];
-                const double tmp3 = slice[3] * basis_jk[3];
-                triangle_eval2 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
-              }
-            }
+        if (evflag) {
+          ev_tally3(i, j, k, evdwl, 0, Fj, Fk, del_rji, del_rki);
+          // Centroid stress 3-body term
+          if (vflag_either && cvflag_atom) {
 
-            for (int l = 0; l < 4; l++) {
-              const double basis_ij_i = basis_ij[l];
-              for (int m = 0; m < 4; m++) {
-                const double factor = basis_ij_i * basis_ik[m];
-                double *slice = &(uf3_potential->coeff_for_der_jk[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                const double tmp0 = slice[0] * basis_jk_der[0];
-                const double tmp1 = slice[1] * basis_jk_der[1];
-                const double tmp2 = slice[2] * basis_jk_der[2];
-                triangle_eval3 += factor * (tmp0 + tmp1 + tmp2);
-              }
-            }
+            const double ric0 = THIRD * (-del_rji[0] - del_rki[0]);
+            const double ric1 = THIRD * (-del_rji[1] - del_rki[1]);
+            const double ric2 = THIRD * (-del_rji[2] - del_rki[2]);
+            cvatom[i][0] += ric0 * Fi[0];
+            cvatom[i][1] += ric1 * Fi[1];
+            cvatom[i][2] += ric2 * Fi[2];
+            cvatom[i][3] += ric0 * Fi[1];
+            cvatom[i][4] += ric0 * Fi[2];
+            cvatom[i][5] += ric1 * Fi[2];
+            cvatom[i][6] += ric1 * Fi[0];
+            cvatom[i][7] += ric2 * Fi[0];
+            cvatom[i][8] += ric2 * Fi[1];
 
-            const double fij0 = triangle_eval1 * del_rji[0] / rij;
-            const double fik0 = triangle_eval2 * del_rki[0] / rik;
-            const double fjk0 = triangle_eval3 * del_rkj[0] / rjk;
+            const double rjc0 = THIRD * (del_rji[0] - del_rkj[0]);
+            const double rjc1 = THIRD * (del_rji[1] - del_rkj[1]);
+            const double rjc2 = THIRD * (del_rji[2] - del_rkj[2]);
+            cvatom[j][0] += rjc0 * Fj[0];
+            cvatom[j][1] += rjc1 * Fj[1];
+            cvatom[j][2] += rjc2 * Fj[2];
+            cvatom[j][3] += rjc0 * Fj[1];
+            cvatom[j][4] += rjc0 * Fj[2];
+            cvatom[j][5] += rjc1 * Fj[2];
+            cvatom[j][6] += rjc1 * Fj[0];
+            cvatom[j][7] += rjc2 * Fj[0];
+            cvatom[j][8] += rjc2 * Fj[1];
 
-            const double fij1 = triangle_eval1 * del_rji[1] / rij;
-            const double fik1 = triangle_eval2 * del_rki[1] / rik;
-            const double fjk1 = triangle_eval3 * del_rkj[1] / rjk;
-
-            const double fij2 = triangle_eval1 * del_rji[2] / rij;
-            const double fik2 = triangle_eval2 * del_rki[2] / rik;
-            const double fjk2 = triangle_eval3 * del_rkj[2] / rjk;
-
-            double Fi[3], Fj[3], Fk[3];
-
-            Fi[0] = fij0 + fik0;
-            Fi[1] = fij1 + fik1;
-            Fi[2] = fij2 + fik2;
-            f[i][0] += Fi[0];
-            f[i][1] += Fi[1];
-            f[i][2] += Fi[2];
-
-            Fj[0] = -fij0 + fjk0;
-            Fj[1] = -fij1 + fjk1;
-            Fj[2] = -fij2 + fjk2;
-            f[j][0] += Fj[0];
-            f[j][1] += Fj[1];
-            f[j][2] += Fj[2];
-
-            Fk[0] = -(fik0 + fjk0);
-            Fk[1] = -(fik1 + fjk1);
-            Fk[2] = -(fik2 + fjk2);
-            f[k][0] += Fk[0];
-            f[k][1] += Fk[1];
-            f[k][2] += Fk[2];
-
-            if (eflag) {
-              for (int l = 0; l < 4; l++) {
-                const double basis_ij_i = basis_ij[l];
-                for (int m = 0; m < 4; m++) {
-                  const double factor = basis_ij_i * basis_ik[m];
-                  const double *slice =
-                      &(uf3_potential->n3b_coeff_array[map_to][iknot_ij + l][iknot_ik + m][iknot_jk]);
-                  const double tmp0 = slice[0] * basis_jk[0];
-                  const double tmp1 = slice[1] * basis_jk[1];
-                  const double tmp2 = slice[2] * basis_jk[2];
-                  const double tmp3 = slice[3] * basis_jk[3];
-                  triangle_eval0 += factor * (tmp0 + tmp1 + tmp2 + tmp3);
-                }
-              }
-              evdwl = triangle_eval0;
-            }
-
-            if (evflag) {
-              ev_tally3(i, j, k, evdwl, 0, Fj, Fk, del_rji, del_rki);
-              // Centroid stress 3-body term
-              if (vflag_either && cvflag_atom) {
-
-                const double ric0 = THIRD * (-del_rji[0] - del_rki[0]);
-                const double ric1 = THIRD * (-del_rji[1] - del_rki[1]);
-                const double ric2 = THIRD * (-del_rji[2] - del_rki[2]);
-                cvatom[i][0] += ric0 * Fi[0];
-                cvatom[i][1] += ric1 * Fi[1];
-                cvatom[i][2] += ric2 * Fi[2];
-                cvatom[i][3] += ric0 * Fi[1];
-                cvatom[i][4] += ric0 * Fi[2];
-                cvatom[i][5] += ric1 * Fi[2];
-                cvatom[i][6] += ric1 * Fi[0];
-                cvatom[i][7] += ric2 * Fi[0];
-                cvatom[i][8] += ric2 * Fi[1];
-
-                const double rjc0 = THIRD * (del_rji[0] - del_rkj[0]);
-                const double rjc1 = THIRD * (del_rji[1] - del_rkj[1]);
-                const double rjc2 = THIRD * (del_rji[2] - del_rkj[2]);
-                cvatom[j][0] += rjc0 * Fj[0];
-                cvatom[j][1] += rjc1 * Fj[1];
-                cvatom[j][2] += rjc2 * Fj[2];
-                cvatom[j][3] += rjc0 * Fj[1];
-                cvatom[j][4] += rjc0 * Fj[2];
-                cvatom[j][5] += rjc1 * Fj[2];
-                cvatom[j][6] += rjc1 * Fj[0];
-                cvatom[j][7] += rjc2 * Fj[0];
-                cvatom[j][8] += rjc2 * Fj[1];
-
-                const double rkc0 = THIRD * (del_rki[0] + del_rkj[0]);
-                const double rkc1 = THIRD * (del_rki[1] + del_rkj[1]);
-                const double rkc2 = THIRD * (del_rki[2] + del_rkj[2]);
-                cvatom[k][0] += rkc0 * Fk[0];
-                cvatom[k][1] += rkc1 * Fk[1];
-                cvatom[k][2] += rkc2 * Fk[2];
-                cvatom[k][3] += rkc0 * Fk[1];
-                cvatom[k][4] += rkc0 * Fk[2];
-                cvatom[k][5] += rkc1 * Fk[2];
-                cvatom[k][6] += rkc1 * Fk[0];
-                cvatom[k][7] += rkc2 * Fk[0];
-                cvatom[k][8] += rkc2 * Fk[1];
-              }
-            }
+            const double rkc0 = THIRD * (del_rki[0] + del_rkj[0]);
+            const double rkc1 = THIRD * (del_rki[1] + del_rkj[1]);
+            const double rkc2 = THIRD * (del_rki[2] + del_rkj[2]);
+            cvatom[k][0] += rkc0 * Fk[0];
+            cvatom[k][1] += rkc1 * Fk[1];
+            cvatom[k][2] += rkc2 * Fk[2];
+            cvatom[k][3] += rkc0 * Fk[1];
+            cvatom[k][4] += rkc0 * Fk[2];
+            cvatom[k][5] += rkc1 * Fk[2];
+            cvatom[k][6] += rkc1 * Fk[0];
+            cvatom[k][7] += rkc2 * Fk[0];
+            cvatom[k][8] += rkc2 * Fk[1];
           }
         }
       }
