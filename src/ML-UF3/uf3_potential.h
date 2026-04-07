@@ -40,7 +40,7 @@ class UF3Potential : protected Pointers {
   double ****cached_constants_3b, ****cached_constants_3b_deri;
   double ****coeff_for_der_jk, ****coeff_for_der_ik, ****coeff_for_der_ij;
 
-  int max_num_knots_2b, max_num_coeff_2b, max_num_knots_3b, max_num_coeff_3b;
+  int max_num_knots_2b, max_num_coeff_2b, max_num_knots_3b, max_num_coeff_3b, tot_interaction_count_3b;
 
  protected:
 
@@ -68,8 +68,6 @@ class UF3Potential : protected Pointers {
   int get_starting_index_uniform_3b(int i, int j, int k, double r, int knot_dim);
   int get_starting_index_nonuniform_2b(int i, int j, double r);
   int get_starting_index_nonuniform_3b(int i, int j, int k, double r, int knot_dim);
-
-  int tot_interaction_count_3b;
 
 };
 
