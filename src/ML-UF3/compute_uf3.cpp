@@ -44,6 +44,10 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   else if (nbody == 3) pot_3b = true;
   else error->all(FLERR, "compute uf3 not (yet) implemented for {}-body terms", nbody);
 
+  virial_flag = utils::logical(FLERR, arg[4], false, lmp);
+  if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
+  else size_array_rows = 1 + 3*(atom->natoms);
+
   const int np1 = atom->ntypes + 1;
   memory->create(setflag, np1, np1, "uf3:setflag");
   memory->create(cutsq, np1, np1, "uf3:cutsq");
@@ -53,11 +57,8 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   }
 
   std::vector<std::string> elements_(1); 
-  for(int i=5; i<narg ; i++) elements_.push_back(arg[i]);
-  uf3_potential = new UF3Potential(lmp, arg[4], cutsq, setflag, elements_, pot_3b);
-
-  if (virial_flag) size_array_rows = 1 + 3*(atom->natoms) + 6;
-  else size_array_rows = 1 + 3*(atom->natoms);
+  for(int i=6; i<narg ; i++) elements_.push_back(arg[i]);
+  uf3_potential = new UF3Potential(lmp, arg[5], cutsq, setflag, elements_, pot_3b);
 
   const int ntypes = atom->ntypes;
   for (int i = 1; i <= ntypes; i++) {
@@ -200,7 +201,7 @@ void ComputeUF3::compute_array()
       for (int m = 0; m < 4; m++) {
         // Direct sparse mapping from the .pot file
         double map_val = uf3_potential->n2b_coeff_array[itype][jtype][start_idx - 3 + m];
-        if (map_val < 0.5) continue; // Python dropped this column
+        if (map_val < -0.5) continue; // Python dropped this column
         const int sparse_col = static_cast<int>(std::round(map_val));
 
         const int n = (3 - m) * 4;
@@ -353,8 +354,8 @@ void ComputeUF3::compute_array()
               
               // Direct sparse mapping from the .pot file
               const double map_val = uf3_potential->n3b_coeff_array[map_to][iknot_ij + l][iknot_ik + m][iknot_jk + n];
-              if (map_val < 0.5) continue; // Python dropped this column
-              
+              if (map_val < -0.5) continue; // Python dropped this column
+
               const int sparse_col = static_cast<int>(std::round(map_val));
               
               const double b_jk  = basis_jk[n];
