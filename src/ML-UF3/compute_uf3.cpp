@@ -24,17 +24,18 @@
 #include "pair.h"
 #include "update.h"
 
+#include <algorithm>
 #include <cstdio>
 
 using namespace LAMMPS_NS;
 
 static constexpr int leading_trim = 3;
-// allow column index (n_WW - 1 - trailing_trim), e.g. four active bases up to WW8 when size is 11
 static constexpr int trailing_trim = 2;
 
 ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
-    Compute(lmp, narg, arg), list(nullptr), array_local(nullptr),
-    c_pe(nullptr), c_virial(nullptr)
+    Compute(lmp, narg, arg), cutsq(nullptr), setflag(nullptr),
+    neighshort(nullptr), type_offset_2b(nullptr), type_offset_3b(nullptr),
+    list(nullptr), array_local(nullptr), c_pe(nullptr), c_virial(nullptr)
 {
   array_flag = 1;
   extarray = 0;
@@ -50,6 +51,7 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   memory->create(setflag, np1, np1, "uf3:setflag");
   memory->create(cutsq, np1, np1, "uf3:cutsq");
   if (pot_3b) {
+    maxshort = 20;
     memory->create(neighshort, maxshort, "uf3:neighshort");
     memory->create(cutsq, np1, np1, "uf3:cutsq");
   }
@@ -81,9 +83,8 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
         for (int k = j; k <= ntypes; k++) {
           const int map_to = uf3_potential->map_3b[i][j][k];
           type_offset_3b[map_to] = size_array_cols;
-          size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][0];
-          size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][1];
-          size_array_cols += uf3_potential->n3b_coeff_array_size[map_to][2];
+          auto n3b_coeff_size = uf3_potential->n3b_coeff_array_size[map_to];
+          size_array_cols += n3b_coeff_size[0] * n3b_coeff_size[1] * n3b_coeff_size[2];
 
           //fprintf(stderr, "*** map_3b[%i][%i][%i] %i n3b_coeff_array_size[map_to] %i %i %i\n", i, j, k, map_to, uf3_potential->n3b_coeff_array_size[map_to][0], uf3_potential->n3b_coeff_array_size[map_to][1], uf3_potential->n3b_coeff_array_size[map_to][2]);
         }
@@ -92,7 +93,7 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   }
 
   size_array_cols++; // last column is regression b vector
-  //fprintf(stderr, "*** size_array_cols %i\n", size_array_cols);
+  fprintf(stderr, "*** size_array_cols %i\n", size_array_cols);
   lastcol = size_array_cols-1;
 
 }
@@ -180,19 +181,22 @@ void ComputeUF3::compute_array()
     const int i = ilist[ii];
     if (!(mask[i] & groupbit)) continue;
 
+    const double xi0 = x[i][0];
+    const double xi1 = x[i][1];
+    const double xi2 = x[i][2];
     const int itype = type[i];
     const int* const jlist = firstneigh[i];
-    const int jnum = numneigh[i];
+    int numshort = 0;
     const int row_offset_i = 1 + 3*(atom->tag[i]-1);
 
-    for (int jj = 0; jj < jnum; jj++) {
+    for (int jj = 0; jj < numneigh[i]; jj++) {
       const int j = jlist[jj];
       const int jtype = type[j];
       const int row_offset_j = 1 + 3*(atom->tag[j]-1);
 
-      const double delx = x[i][0] - x[j][0];
-      const double dely = x[i][1] - x[j][1];
-      const double delz = x[i][2] - x[j][2];
+      const double delx = xi0 - x[j][0];
+      const double dely = xi1 - x[j][1];
+      const double delz = xi2 - x[j][2];
       const double rsq = delx*delx + dely*dely + delz*delz;
       if (rsq >= cutsq[itype][jtype]) continue;
 
@@ -201,23 +205,30 @@ void ComputeUF3::compute_array()
       const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
       //fprintf(stderr, "*** rsq %f start_idx %i x[%i] %f %f %f x[%i] %f %f %f\n", rsq, start_idx, i, x[i][0], x[i][1], x[i][2], j, x[j][0], x[j][1], x[j][2]);
 
+      if (pot_3b) {
+        if (rij <= uf3_potential->cut_3b_list[itype][jtype]) {
+          neighshort[numshort] = j;
+          if (numshort >= maxshort - 1) {
+            maxshort += maxshort / 2;
+            memory->grow(neighshort, maxshort, "pair:neighshort");
+          }
+          numshort = numshort + 1;
+        }
+      }
+
       // ENERGY & FORCE FEATURE EXTRACTION
-      double **constants_2b = &(uf3_potential->cached_constants_2b[itype][jtype][start_idx-3]);
-      double **constants_2b_deri = &(uf3_potential->cached_constants_2b_deri[itype][jtype][start_idx-3]);
+      double **cc_2b = &(uf3_potential->cached_constants_2b[itype][jtype][start_idx-3]);
+      double **cc_2b_deri = &(uf3_potential->cached_constants_2b_deri[itype][jtype][start_idx-3]);
 
       // Extract the 4 active basis functions directly from your pre-computed matrices
       for (int m = 0; m < 4; m++) {
-        // map knot segment (start_idx-3)+m to WW column matching external tables (1-based segment index)
         const int col_offset = type_offset_2b[itype][jtype] + m + start_idx - 3;
-        if ( col_offset < leading_trim || col_offset > size_array_cols-trailing_trim-3 ) continue;
+        if ( col_offset < leading_trim || col_offset > size_array_cols-trailing_trim-3 ) continue; //FIXME multielement
         // 1. Energy Feature (Cubic: 4 coefficients)
         const int n = (3 - m) * 4;
-        array_local[0][col_offset] +=         constants_2b[m][n]
-                                      + rij * constants_2b[m][n+1]
-                                      + rsq * constants_2b[m][n+2]
-                                      + rth * constants_2b[m][n+3];
+        array_local[0][col_offset] += cc_2b[m][n] + rij * cc_2b[m][n+1] + rsq * cc_2b[m][n+2] + rth * cc_2b[m][n+3];
         // 2. Force Feature (Derivative of the cubic: C1 + 2*C2*r + 3*C3*r^2)
-        const double b_der = constants_2b[m][n+1] + 2.0 * rij * constants_2b[m][n+2] + 3.0 * rsq * constants_2b[m][n+3];
+        const double b_der = cc_2b[m][n+1] + 2.0 * rij * cc_2b[m][n+2] + 3.0 * rsq * cc_2b[m][n+3];
         const double force_factor = -b_der / rij;
         const double fx_feature = delx * force_factor;
         const double fy_feature = dely * force_factor;
@@ -240,6 +251,310 @@ void ComputeUF3::compute_array()
         }
       }
     } // loop over jj inside
+
+    // 3-body interaction
+    // jth atom
+
+    for (int jj = 0; jj < numshort - 1; jj++) {
+
+      double del_rji[3], del_rki[3], del_rkj[3];
+
+      const int j = neighshort[jj];
+      const int jtype = type[j];
+      const int row_offset_j = 1 + 3*(atom->tag[j]-1);
+
+      del_rji[0] = x[j][0] - xi0;
+      del_rji[1] = x[j][1] - xi1;
+      del_rji[2] = x[j][2] - xi2;
+      const double rij_sq = (del_rji[0] * del_rji[0]) + (del_rji[1] * del_rji[1]) + (del_rji[2] * del_rji[2]);
+      const double rij = sqrt(rij_sq);
+
+      // kth atom
+      for (int kk = jj + 1; kk < numshort; kk++) {
+
+        const int k = neighshort[kk];
+        const int ktype = type[k];
+        const int row_offset_k = 1 + 3*(atom->tag[k]-1);
+
+        del_rki[0] = x[k][0] - xi0;
+        del_rki[1] = x[k][1] - xi1;
+        del_rki[2] = x[k][2] - xi2;
+        const double rik_sq = (del_rki[0] * del_rki[0]) + (del_rki[1] * del_rki[1]) + (del_rki[2] * del_rki[2]);
+        const double rik = sqrt(rik_sq);
+        auto cut_3b_i = uf3_potential->cut_3b[itype];
+        auto min_cut_3b_ijk = uf3_potential->min_cut_3b[itype][jtype][ktype];
+        if ( rij > cut_3b_i[jtype][ktype] || rij < min_cut_3b_ijk[2] ) continue;
+        if ( rik > cut_3b_i[ktype][jtype] || rik < min_cut_3b_ijk[1] ) continue;
+
+        del_rkj[0] = x[k][0] - x[j][0];
+        del_rkj[1] = x[k][1] - x[j][1];
+        del_rkj[2] = x[k][2] - x[j][2];
+        const double rjk_sq =(del_rkj[0] * del_rkj[0]) + (del_rkj[1] * del_rkj[1]) + (del_rkj[2] * del_rkj[2]);
+        const double rjk = sqrt(rjk_sq);
+        if (rjk < min_cut_3b_ijk[0]) continue;
+
+        const double rij_th = rij * rij_sq;
+        const double rik_th = rik * rik_sq;
+        const double rjk_th = rjk * rjk_sq;
+
+        const int map_to = uf3_potential->map_3b[itype][jtype][ktype];
+        double ***cached_constants_3b = uf3_potential->cached_constants_3b[map_to];
+        double ***cached_constants_3b_deri = uf3_potential->cached_constants_3b_deri[map_to];
+        const int iknot_ij = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rij, 2) - 3;
+        const int iknot_ik = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rik, 1) - 3;
+        const int iknot_jk = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rjk, 0) - 3;
+        double basis_ij[4], basis_ik[4], basis_jk[4], basis_ij_der[3], basis_ik_der[3], basis_jk_der[3];
+
+        fprintf(stderr, "*** type_offset_3b[%i] %i iknot_ij %i iknot_ik %i iknot_jk %i\n", map_to, type_offset_3b[map_to], iknot_ij, iknot_ik, iknot_jk);
+
+
+
+        // -------- basis_ij_der --------
+        auto cc_3b_deri_ij = &(cached_constants_3b_deri[0][iknot_ij]);
+        basis_ij_der[0] = cc_3b_deri_ij[0][6] + rij * cc_3b_deri_ij[0][7] + rij_sq * cc_3b_deri_ij[0][8];
+        basis_ij_der[1] = cc_3b_deri_ij[1][3] + rij * cc_3b_deri_ij[1][4] + rij_sq * cc_3b_deri_ij[1][5];
+        basis_ij_der[2] = cc_3b_deri_ij[2][0] + rij * cc_3b_deri_ij[2][1] + rij_sq * cc_3b_deri_ij[2][2];
+
+        // -------- basis_ik_der --------
+        auto cc_3b_deri_ik = &(cached_constants_3b_deri[1][iknot_ik]);
+        basis_ik_der[0] = cc_3b_deri_ik[0][6] + rik * cc_3b_deri_ik[0][7] + rik_sq * cc_3b_deri_ik[0][8];
+        basis_ik_der[1] = cc_3b_deri_ik[1][3] + rik * cc_3b_deri_ik[1][4] + rik_sq * cc_3b_deri_ik[1][5];
+        basis_ik_der[2] = cc_3b_deri_ik[2][0] + rik * cc_3b_deri_ik[2][1] + rik_sq * cc_3b_deri_ik[2][2];
+
+        // -------- basis_jk_der --------
+        auto cc_3b_deri_jk = &(cached_constants_3b_deri[2][iknot_jk]);
+        basis_jk_der[0] = cc_3b_deri_jk[0][6] + rjk * cc_3b_deri_jk[0][7] + rjk_sq * cc_3b_deri_jk[0][8];
+        basis_jk_der[1] = cc_3b_deri_jk[1][3] + rjk * cc_3b_deri_jk[1][4] + rjk_sq * cc_3b_deri_jk[1][5];
+        basis_jk_der[2] = cc_3b_deri_jk[2][0] + rjk * cc_3b_deri_jk[2][1] + rjk_sq * cc_3b_deri_jk[2][2];
+
+        // Ensure 4th element padding for derivative arrays to unify the loops
+        const double d_bij[4] = {basis_ij_der[0], basis_ij_der[1], basis_ij_der[2], 0.0};
+        const double d_bik[4] = {basis_ik_der[0], basis_ik_der[1], basis_ik_der[2], 0.0};
+        const double d_bjk[4] = {basis_jk_der[0], basis_jk_der[1], basis_jk_der[2], 0.0};
+
+        // Precompute spatial unit vectors
+        const double dx_ij = del_rji[0] / rij;
+        const double dy_ij = del_rji[1] / rij;
+        const double dz_ij = del_rji[2] / rij;
+
+        const double dx_ik = del_rki[0] / rik;
+        const double dy_ik = del_rki[1] / rik;
+        const double dz_ik = del_rki[2] / rik;
+
+        const double dx_jk = del_rkj[0] / rjk;
+        const double dy_jk = del_rkj[1] / rjk;
+        const double dz_jk = del_rkj[2] / rjk;
+
+        const int base_offset = type_offset_3b[map_to];
+        const int K_m = uf3_potential->n3b_coeff_array_size[map_to][1];
+        const int K_n = uf3_potential->n3b_coeff_array_size[map_to][0];
+
+        // Unified Descriptor Accumulation
+        for (int l = 0; l < 4; l++) {
+          const double b_ij  = basis_ij[l];
+          const double db_ij = d_bij[l];
+          
+          for (int m = 0; m < 4; m++) {
+            const double b_ik  = basis_ik[m];
+            const double db_ik = d_bik[m];
+            
+            // Flattened 1D matrix column for this (l, m) tensor slice
+            const int col_offset = base_offset + (iknot_ij + l) * K_m * K_n + (iknot_ik + m) * K_n + iknot_jk;
+
+            // Precompute constant base products for the final n-loop
+            const double term1_base = db_ij * b_ik; 
+            const double term2_base = b_ij * db_ik; 
+            const double term3_base = b_ij * b_ik;  
+
+            for (int n = 0; n < 4; n++) {
+              const int current_col = col_offset + n;
+              
+              const double b_jk  = basis_jk[n];
+              const double db_jk = d_bjk[n];
+
+              // --- 1. ENERGY DESCRIPTOR ---
+              array_local[0][current_col] += term3_base * b_jk;
+
+              // --- 2. FORCE DESCRIPTORS ---
+              const double d_ij_part = term1_base * b_jk;
+              const double d_ik_part = term2_base * b_jk;
+              const double d_jk_part = term3_base * db_jk;
+
+              // Project onto Cartesian axes
+              const double fij_x = d_ij_part * dx_ij;
+              const double fik_x = d_ik_part * dx_ik;
+              const double fjk_x = d_jk_part * dx_jk;
+
+              const double fij_y = d_ij_part * dy_ij;
+              const double fik_y = d_ik_part * dy_ik;
+              const double fjk_y = d_jk_part * dy_jk;
+
+              const double fij_z = d_ij_part * dz_ij;
+              const double fik_z = d_ik_part * dz_ik;
+              const double fjk_z = d_jk_part * dz_jk;
+
+              // Force on atom i
+              array_local[row_offset_i    ][current_col] += (fij_x + fik_x);
+              array_local[row_offset_i + 1][current_col] += (fij_y + fik_y);
+              array_local[row_offset_i + 2][current_col] += (fij_z + fik_z);
+
+              // Force on atom j
+              array_local[row_offset_j    ][current_col] += (-fij_x + fjk_x);
+              array_local[row_offset_j + 1][current_col] += (-fij_y + fjk_y);
+              array_local[row_offset_j + 2][current_col] += (-fij_z + fjk_z);
+
+              // Force on atom k
+              array_local[row_offset_k    ][current_col] -= (fik_x + fjk_x);
+              array_local[row_offset_k + 1][current_col] -= (fik_y + fjk_y);
+              array_local[row_offset_k + 2][current_col] -= (fik_z + fjk_z);
+            }
+          }
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // -------- basis_ij --------
+        auto cc_3b_ij = &(cached_constants_3b[0][iknot_ij]);
+        basis_ij[0] = cc_3b_ij[0][12] + rij * cc_3b_ij[0][13] + rij_sq * cc_3b_ij[0][14] + rij_th * cc_3b_ij[0][15];
+        basis_ij[1] = cc_3b_ij[1][8]  + rij * cc_3b_ij[1][9]  + rij_sq * cc_3b_ij[1][10] + rij_th * cc_3b_ij[1][11];
+        basis_ij[2] = cc_3b_ij[2][4]  + rij * cc_3b_ij[2][5]  + rij_sq * cc_3b_ij[2][6]  + rij_th * cc_3b_ij[2][7];
+        basis_ij[3] = cc_3b_ij[3][0]  + rij * cc_3b_ij[3][1]  + rij_sq * cc_3b_ij[3][2]  + rij_th * cc_3b_ij[3][3];
+
+        // -------- basis_ik --------
+        auto cc_3b_ik = &(cached_constants_3b[1][iknot_ik]);
+        basis_ik[0] = cc_3b_ik[0][12] + rik * cc_3b_ik[0][13] + rik_sq * cc_3b_ik[0][14] + rik_th * cc_3b_ik[0][15];
+        basis_ik[1] = cc_3b_ik[1][8]  + rik * cc_3b_ik[1][9]  + rik_sq * cc_3b_ik[1][10] + rik_th * cc_3b_ik[1][11];
+        basis_ik[2] = cc_3b_ik[2][4]  + rik * cc_3b_ik[2][5]  + rik_sq * cc_3b_ik[2][6]  + rik_th * cc_3b_ik[2][7];
+        basis_ik[3] = cc_3b_ik[3][0]  + rik * cc_3b_ik[3][1]  + rik_sq * cc_3b_ik[3][2]  + rik_th * cc_3b_ik[3][3];
+
+        // -------- basis_jk --------
+        auto cc_3b_jk = &(cached_constants_3b[2][iknot_jk]);
+        basis_jk[0] = cc_3b_jk[0][12] + rjk * cc_3b_jk[0][13] + rjk_sq * cc_3b_jk[0][14] + rjk_th * cc_3b_jk[0][15];
+        basis_jk[1] = cc_3b_jk[1][8]  + rjk * cc_3b_jk[1][9]  + rjk_sq * cc_3b_jk[1][10] + rjk_th * cc_3b_jk[1][11];
+        basis_jk[2] = cc_3b_jk[2][4]  + rjk * cc_3b_jk[2][5]  + rjk_sq * cc_3b_jk[2][6]  + rjk_th * cc_3b_jk[2][7];
+        basis_jk[3] = cc_3b_jk[3][0]  + rjk * cc_3b_jk[3][1]  + rjk_sq * cc_3b_jk[3][2]  + rjk_th * cc_3b_jk[3][3];
+
+
+        const int base_offset = type_offset_3b[map_to];
+        const int K_m = uf3_potential->n3b_coeff_array_size[map_to][1]; // Total basis functions for r_ik
+        const int K_n = uf3_potential->n3b_coeff_array_size[map_to][0]; // Total basis functions for r_jk
+        for (int l = 0; l < 4; l++) {
+          const double basis_ij_i = basis_ij[l];
+          for (int m = 0; m < 4; m++) {
+            const double factor = basis_ij_i * basis_ik[m];
+            const int col_offset = base_offset + (iknot_ij + l) * K_m * K_n + (iknot_ik + m) * K_n + iknot_jk;
+            //if ( col_offset < leading_trim || col_offset > size_array_cols-trailing_trim-3 ) continue;
+            array_local[0][col_offset]   += factor * basis_jk[0];
+            array_local[0][col_offset+1] += factor * basis_jk[1];
+            array_local[0][col_offset+2] += factor * basis_jk[2];
+            array_local[0][col_offset+3] += factor * basis_jk[3];
+          }
+        }
+
+        // -------- basis_ij_der --------
+        auto cc_3b_deri_ij = &(cached_constants_3b_deri[0][iknot_ij]);
+        basis_ij_der[0] = cc_3b_deri_ij[0][6] + rij * cc_3b_deri_ij[0][7] + rij_sq * cc_3b_deri_ij[0][8];
+        basis_ij_der[1] = cc_3b_deri_ij[1][3] + rij * cc_3b_deri_ij[1][4] + rij_sq * cc_3b_deri_ij[1][5];
+        basis_ij_der[2] = cc_3b_deri_ij[2][0] + rij * cc_3b_deri_ij[2][1] + rij_sq * cc_3b_deri_ij[2][2];
+
+        // -------- basis_ik_der --------
+        auto cc_3b_deri_ik = &(cached_constants_3b_deri[1][iknot_ik]);
+        basis_ik_der[0] = cc_3b_deri_ik[0][6] + rik * cc_3b_deri_ik[0][7] + rik_sq * cc_3b_deri_ik[0][8];
+        basis_ik_der[1] = cc_3b_deri_ik[1][3] + rik * cc_3b_deri_ik[1][4] + rik_sq * cc_3b_deri_ik[1][5];
+        basis_ik_der[2] = cc_3b_deri_ik[2][0] + rik * cc_3b_deri_ik[2][1] + rik_sq * cc_3b_deri_ik[2][2];
+
+        // -------- basis_jk_der --------
+        auto cc_3b_deri_jk = &(cached_constants_3b_deri[2][iknot_jk]);
+        basis_jk_der[0] = cc_3b_deri_jk[0][6] + rjk * cc_3b_deri_jk[0][7] + rjk_sq * cc_3b_deri_jk[0][8];
+        basis_jk_der[1] = cc_3b_deri_jk[1][3] + rjk * cc_3b_deri_jk[1][4] + rjk_sq * cc_3b_deri_jk[1][5];
+        basis_jk_der[2] = cc_3b_deri_jk[2][0] + rjk * cc_3b_deri_jk[2][1] + rjk_sq * cc_3b_deri_jk[2][2];
+
+        double triangle_eval1 = 0.0;
+        for (int l = 0; l < 3; l++) {
+          const double basis_ij_der_i = basis_ij_der[l];
+          for (int m = 0; m < 4; m++) {
+            const double factor = basis_ij_der_i * basis_ik[m];
+            triangle_eval1 += factor * (basis_jk[0] + basis_jk[1] + basis_jk[2] + basis_jk[3]);
+          }
+        }
+
+        double triangle_eval2 = 0.0;
+        for (int l = 0; l < 4; l++) {
+          const double basis_ij_i = basis_ij[l];
+          for (int m = 0; m < 3; m++) {
+            const double factor = basis_ij_i * basis_ik_der[m];
+            triangle_eval2 += factor * (basis_jk[0] + basis_jk[1] + basis_jk[2] + basis_jk[3]);
+          }
+        }
+
+        double triangle_eval3 = 0.0;
+        for (int l = 0; l < 4; l++) {
+          const double basis_ij_i = basis_ij[l];
+          for (int m = 0; m < 4; m++) {
+            const double factor = basis_ij_i * basis_ik[m];
+            triangle_eval3 += factor * (basis_jk_der[0] + basis_jk_der[1] + basis_jk_der[2]);
+          }
+        }
+
+        const double fij0 = triangle_eval1 * del_rji[0] / rij;
+        const double fik0 = triangle_eval2 * del_rki[0] / rik;
+        const double fjk0 = triangle_eval3 * del_rkj[0] / rjk;
+
+        const double fij1 = triangle_eval1 * del_rji[1] / rij;
+        const double fik1 = triangle_eval2 * del_rki[1] / rik;
+        const double fjk1 = triangle_eval3 * del_rkj[1] / rjk;
+
+        const double fij2 = triangle_eval1 * del_rji[2] / rij;
+        const double fik2 = triangle_eval2 * del_rki[2] / rik;
+        const double fjk2 = triangle_eval3 * del_rkj[2] / rjk;
+
+        double Fi[3], Fj[3], Fk[3];
+
+        Fi[0] = fij0 + fik0;
+        Fi[1] = fij1 + fik1;
+        Fi[2] = fij2 + fik2;
+
+        Fj[0] = -fij0 + fjk0;
+        Fj[1] = -fij1 + fjk1;
+        Fj[2] = -fij2 + fjk2;
+
+        Fk[0] = -(fik0 + fjk0);
+        Fk[1] = -(fik1 + fjk1);
+        Fk[2] = -(fik2 + fjk2);
+
+/*
+        array_local[row_offset_i  ][col_offset] += Fi[0];
+        array_local[row_offset_i+1][col_offset] += Fi[1];
+        array_local[row_offset_i+2][col_offset] += Fi[2];
+
+        array_local[row_offset_j  ][col_offset] += Fj[0];
+        array_local[row_offset_j+1][col_offset] += Fj[1];
+        array_local[row_offset_j+2][col_offset] += Fj[2];
+
+        array_local[row_offset_k  ][col_offset] += Fk[0];
+        array_local[row_offset_k+1][col_offset] += Fk[1];
+        array_local[row_offset_k+2][col_offset] += Fk[2];
+*/
+
+
+
+      }
+    }
+
   } // for ii loop
 
   // accumulate forces to global array
