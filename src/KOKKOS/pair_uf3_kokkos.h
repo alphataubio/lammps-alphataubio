@@ -50,9 +50,6 @@ template <class DeviceType> class PairUF3Kokkos : public PairUF3 {
   double init_one(int, int) override;                 // needed for cutoff radius for neighbour list
   double single(int, int, int, int, double, double, double, double &) override;
 
-  template <typename T, typename V> void copy_2d(V &d, T **h, int m, int n);
-  template <typename T, typename V> void copy_3d(V &d, T ***h, int m, int n, int o);
-
   template <int NEIGHFLAG, int EVFLAG>
 // NOLINTNEXTLINE
   KOKKOS_INLINE_FUNCTION void operator()(TagPairUF3ComputeFullA<NEIGHFLAG, EVFLAG>, const int &,

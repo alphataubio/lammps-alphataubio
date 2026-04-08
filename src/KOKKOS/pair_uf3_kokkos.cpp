@@ -219,8 +219,7 @@ template <class DeviceType> void PairUF3Kokkos<DeviceType>::create_coefficients(
   int interaction_count_2b = 0;
   for (int i = 1; i <= ntypes; i++) {
     for (int j = i; j <= ntypes; j++) {
-      map2b_view(i, j) = interaction_count_2b;
-      map2b_view(j, i) = interaction_count_2b++;
+      map2b_view(i, j) = map2b_view(j, i) = interaction_count_2b++;
     }
   }
   Kokkos::deep_copy(map2b, map2b_view);
@@ -1008,55 +1007,6 @@ PairUF3Kokkos<DeviceType>::ev_tally3(EV_FLOAT &ev, const int &i, const int &j, i
    called by SW and hbond potentials, newton_pair is always on
    virial = riFi + rjFj + rkFk = (rj-ri) Fj + (rk-ri) Fk = drji*fj + drki*fk
  ------------------------------------------------------------------------- */
-
-template <class DeviceType>
-template <typename T, typename V>
-void PairUF3Kokkos<DeviceType>::copy_2d(V &d, T **h, int m, int n)
-{
-  Kokkos::View<T **> tmp("pair::tmp", m, n); //Create tmp view(array) on
-  //device memory
-
-  //auto h_view = Kokkos::create_mirror_view(tmp);
-  auto h_view = Kokkos::create_mirror(tmp); //Create a mirror of the device
-  //view(array) tmp, as deep_copy is only possible for mirror views
-
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < n; j++) {
-      h_view(i, j) = h[i][j]; //fill mirror
-    }
-    //views with data from normal array 'h' which always lives on host memory
-  }
-
-  Kokkos::deep_copy(tmp, h_view); //Deepcopy data from h_view(host) to tmp(device)
-
-  d = tmp;
-}
-
-template <class DeviceType>
-template <typename T, typename V>
-void PairUF3Kokkos<DeviceType>::copy_3d(V &d, T ***h, int m, int n, int o)
-{
-  Kokkos::View<T ***> tmp("pair::tmp", m, n, o); //Create tmp view(array) on
-  //device memory
-
-  //auto h_view = Kokkos::create_mirror_view(tmp); //create_mirror always copies
-  //the data. create_mirror_view only copies data if the host cannot access the
-  //data
-  auto h_view = Kokkos::create_mirror(tmp); //Create a mirror of the device
-  //view(array) tmp, as deep_copy is only possible for mirror views
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < n; j++) {
-      for (int k = 0; k < o; k++) { h_view(i, j, k) = h[i][j][k]; } //fill mirror
-      //views with data from normal array 'h' which always lives on host memory
-    }
-  }
-
-  Kokkos::deep_copy(tmp, h_view); //Deepcopy data from h_view(host) to tmp(device)
-
-  d = tmp;
-}
-
-
 
 template <class DeviceType>
 double PairUF3Kokkos<DeviceType>::single(int /*i*/, int /*j*/, int itype, int jtype, double rsq,
