@@ -60,15 +60,19 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   for(int i=6; i<narg ; i++) elements_.push_back(arg[i]);
   uf3_potential = new UF3Potential(lmp, arg[5], cutsq, setflag, elements_, pot_3b);
 
+  lastcol = 0;
   const int ntypes = atom->ntypes;
   for (int i = 1; i <= ntypes; i++) {
     for (int j = i; j <= ntypes; j++) {
       const double cut_2b_ij = uf3_potential->cut_2b[i][j];
       cutsq[i][j] = cutsq[j][i] = cut_2b_ij * cut_2b_ij;
+      for (int l = 0; l < uf3_potential->n2b_coeff_array_size[i][j]; l++) {
+        int idx = static_cast<int>(std::round(uf3_potential->n2b_coeff_array[i][j][l]));
+        if (idx > lastcol) lastcol = idx;
+      }
     }
   }
 
-  lastcol = 0;
   if (pot_3b) {
     for (int i = 1; i <= ntypes; i++) {
       for (int j = i; j <= ntypes; j++) {
@@ -89,7 +93,10 @@ ComputeUF3::ComputeUF3(LAMMPS *lmp, int narg, char **arg) :
   }
   lastcol++; // reference energy/forces last column
   size_array_cols = lastcol + 1;
-  fprintf(stderr, "*** Automatically sized descriptor matrix to %i columns\n", size_array_cols);
+  //fprintf(stderr, "*** Automatically sized descriptor matrix to %i columns\n", size_array_cols);
+  memory->create(array_local, size_array_rows, size_array_cols, "uf3:array_local");
+  memory->create(array, size_array_rows, size_array_cols, "uf3:array");
+
 }
 
 /* ---------------------------------------------------------------------- */
@@ -117,8 +124,6 @@ void ComputeUF3::init()
   if (modify->get_compute_by_style("uf3").size() > 1 && comm->me == 0)
     error->warning(FLERR,"More than one compute uf3");
 
-  memory->create(array_local,size_array_rows,size_array_cols, "uf3:array_local");
-  memory->create(array,size_array_rows,size_array_cols, "uf3:array");
 
   c_pe = modify->get_compute_by_id("thermo_pe");
   if (!c_pe) error->all(FLERR,"Compute thermo_pe does not exist.");
