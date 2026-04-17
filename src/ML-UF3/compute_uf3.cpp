@@ -24,6 +24,7 @@
 #include "pair.h"
 #include "update.h"
 
+#include <cassert>
 #include <cstdio>
 #include <cmath>
 
@@ -188,6 +189,10 @@ void ComputeUF3::compute_array()
       const double rij = sqrt(rsq);
       const double rth = rsq * rij;
       const int start_idx = uf3_potential->get_starting_index_2b(itype, jtype, rij);
+      if (start_idx == -1) {
+        error->warning(FLERR,"rij {} outside knots cutoffs for types {}-{}", rij, itype, jtype);
+        continue;
+      }
 
       if (pot_3b) {
         if (rij <= uf3_potential->cut_3b_list[itype][jtype]) {
@@ -208,6 +213,7 @@ void ComputeUF3::compute_array()
         double map_val = uf3_potential->n2b_coeff_array[itype][jtype][start_idx - 3 + m];
         if (map_val < -0.5) continue; // Python dropped this column
         const int sparse_col = static_cast<int>(std::round(map_val));
+        assert(sparse_col>1);
 
         const int n = (3 - m) * 4;
         const double basis_val = cc_2b[m][n] + rij * cc_2b[m][n+1] + rsq * cc_2b[m][n+2] + rth * cc_2b[m][n+3];
@@ -244,22 +250,33 @@ void ComputeUF3::compute_array()
 
     // --- 3-BODY DESCRIPTORS ---
     for (int jj = 0; jj < numshort - 1; jj++) {
-      double del_rji[3], del_rki[3], del_rkj[3];
-
-      const int j = neighshort[jj];
-      const int jtype = type[j];
-      const int row_offset_j = 1 + 3*(atom->tag[j]-1);
-
-      del_rji[0] = x[j][0] - xi0;
-      del_rji[1] = x[j][1] - xi1;
-      del_rji[2] = x[j][2] - xi2;
-      const double rij_sq = (del_rji[0] * del_rji[0]) + (del_rji[1] * del_rji[1]) + (del_rji[2] * del_rji[2]);
-      const double rij = sqrt(rij_sq);
+      const int j_orig = neighshort[jj];
+      const int jtype_orig = type[j_orig];
 
       for (int kk = jj + 1; kk < numshort; kk++) {
-        const int k = neighshort[kk];
-        const int ktype = type[k];
+        const int k_orig = neighshort[kk];
+        const int ktype_orig = type[k_orig];
+
+        // --- ENFORCE CANONICAL ORDERING ---
+        // Ensure jtype <= ktype to match the Python tensor construction
+        int j = j_orig, k = k_orig;
+        int jt = jtype_orig, kt = ktype_orig;
+
+        if (jt > kt) {
+          std::swap(j, k);
+          std::swap(jt, kt);
+        }
+
+        const int row_offset_j = 1 + 3*(atom->tag[j]-1);
         const int row_offset_k = 1 + 3*(atom->tag[k]-1);
+
+        double del_rji[3], del_rki[3], del_rkj[3];
+
+        del_rji[0] = x[j][0] - xi0;
+        del_rji[1] = x[j][1] - xi1;
+        del_rji[2] = x[j][2] - xi2;
+        const double rij_sq = (del_rji[0] * del_rji[0]) + (del_rji[1] * del_rji[1]) + (del_rji[2] * del_rji[2]);
+        const double rij = sqrt(rij_sq);
 
         del_rki[0] = x[k][0] - xi0;
         del_rki[1] = x[k][1] - xi1;
@@ -268,32 +285,51 @@ void ComputeUF3::compute_array()
         const double rik = sqrt(rik_sq);
 
         auto cut_3b_i = uf3_potential->cut_3b[itype];
-        auto min_cut_3b_ijk = uf3_potential->min_cut_3b[itype][jtype][ktype];
-        if ( rij > cut_3b_i[jtype][ktype] || rij < min_cut_3b_ijk[2] ) continue;
-        if ( rik > cut_3b_i[ktype][jtype] || rik < min_cut_3b_ijk[1] ) continue;
+        auto min_cut_3b_ijk = uf3_potential->min_cut_3b[itype][jt][kt];
+        
+        // Corrected dimension indexing mapping for bounds
+        if ( rij > cut_3b_i[jt][kt] || rij < min_cut_3b_ijk[0] ) continue;
+        if ( rik > cut_3b_i[kt][jt] || rik < min_cut_3b_ijk[1] ) continue;
 
         del_rkj[0] = x[k][0] - x[j][0];
         del_rkj[1] = x[k][1] - x[j][1];
         del_rkj[2] = x[k][2] - x[j][2];
         const double rjk_sq =(del_rkj[0] * del_rkj[0]) + (del_rkj[1] * del_rkj[1]) + (del_rkj[2] * del_rkj[2]);
         const double rjk = sqrt(rjk_sq);
-        if (rjk < min_cut_3b_ijk[0]) continue;
+        
+        // Corrected upper bound check for rjk
+        if ( rjk > cut_3b_i[jt][kt] || rjk < min_cut_3b_ijk[2] ) continue;
 
         const double rij_th = rij * rij_sq;
         const double rik_th = rik * rik_sq;
         const double rjk_th = rjk * rjk_sq;
 
-        const int map_to = uf3_potential->map_3b[itype][jtype][ktype];
+        const int map_to = uf3_potential->map_3b[itype][jt][kt];
         double ***cached_constants_3b = uf3_potential->cached_constants_3b[map_to];
-        double ***cached_constants_3b_deri = uf3_potential->cached_constants_3b_deri[map_to];
         
-        const int iknot_ij = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rij, 2) - 3;
-        const int iknot_ik = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rik, 1) - 3;
-        const int iknot_jk = uf3_potential->get_starting_index_3b(itype, jtype, ktype, rjk, 0) - 3;
-        
-        double basis_ij[4], basis_ik[4], basis_jk[4], basis_ij_der[3], basis_ik_der[3], basis_jk_der[3];
+        // Corrected dimension indexing (0, 1, 2)
+        const int iknot_ij = uf3_potential->get_starting_index_3b(itype, jt, kt, rij, 0) - 3;
+        const int iknot_ik = uf3_potential->get_starting_index_3b(itype, jt, kt, rik, 1) - 3;
+        const int iknot_jk = uf3_potential->get_starting_index_3b(itype, jt, kt, rjk, 2) - 3;
 
-        // Evaluate pure basis functions using the cache
+        if (iknot_ij == -1) {
+          error->warning(FLERR,"rij {} outside knots cutoffs for types {}-{}-{}", rij, itype, jt, kt);
+          continue;
+        }
+
+        if (iknot_ik == -1) {
+          error->warning(FLERR,"rik {} outside knots cutoffs for types {}-{}-{}", rik, itype, jt, kt);
+          continue;
+        }
+
+        if (iknot_jk == -1) {
+          error->warning(FLERR,"rjk {} outside knots cutoffs for types {}-{}-{}", rjk, itype, jt, kt);
+          continue;
+        }
+
+        double basis_ij[4], basis_ik[4], basis_jk[4];
+
+        // Evaluate pure basis functions
         auto cc_3b_ij = &(cached_constants_3b[0][iknot_ij]);
         basis_ij[0] = cc_3b_ij[0][12] + rij * cc_3b_ij[0][13] + rij_sq * cc_3b_ij[0][14] + rij_th * cc_3b_ij[0][15];
         basis_ij[1] = cc_3b_ij[1][8]  + rij * cc_3b_ij[1][9]  + rij_sq * cc_3b_ij[1][10] + rij_th * cc_3b_ij[1][11];
@@ -312,24 +348,27 @@ void ComputeUF3::compute_array()
         basis_jk[2] = cc_3b_jk[2][4]  + rjk * cc_3b_jk[2][5]  + rjk_sq * cc_3b_jk[2][6]  + rjk_th * cc_3b_jk[2][7];
         basis_jk[3] = cc_3b_jk[3][0]  + rjk * cc_3b_jk[3][1]  + rjk_sq * cc_3b_jk[3][2]  + rjk_th * cc_3b_jk[3][3];
 
-        auto cc_3b_deri_ij = &(cached_constants_3b_deri[0][iknot_ij]);
-        basis_ij_der[0] = cc_3b_deri_ij[0][6] + rij * cc_3b_deri_ij[0][7] + rij_sq * cc_3b_deri_ij[0][8];
-        basis_ij_der[1] = cc_3b_deri_ij[1][3] + rij * cc_3b_deri_ij[1][4] + rij_sq * cc_3b_deri_ij[1][5];
-        basis_ij_der[2] = cc_3b_deri_ij[2][0] + rij * cc_3b_deri_ij[2][1] + rij_sq * cc_3b_deri_ij[2][2];
+        // Corrected analytical B-spline derivatives directly from the main coefficients
+        const double d_bij[4] = {
+            cc_3b_ij[0][13] + 2.0 * rij * cc_3b_ij[0][14] + 3.0 * rij_sq * cc_3b_ij[0][15],
+            cc_3b_ij[1][9]  + 2.0 * rij * cc_3b_ij[1][10] + 3.0 * rij_sq * cc_3b_ij[1][11],
+            cc_3b_ij[2][5]  + 2.0 * rij * cc_3b_ij[2][6]  + 3.0 * rij_sq * cc_3b_ij[2][7],
+            cc_3b_ij[3][1]  + 2.0 * rij * cc_3b_ij[3][2]  + 3.0 * rij_sq * cc_3b_ij[3][3]
+        };
 
-        auto cc_3b_deri_ik = &(cached_constants_3b_deri[1][iknot_ik]);
-        basis_ik_der[0] = cc_3b_deri_ik[0][6] + rik * cc_3b_deri_ik[0][7] + rik_sq * cc_3b_deri_ik[0][8];
-        basis_ik_der[1] = cc_3b_deri_ik[1][3] + rik * cc_3b_deri_ik[1][4] + rik_sq * cc_3b_deri_ik[1][5];
-        basis_ik_der[2] = cc_3b_deri_ik[2][0] + rik * cc_3b_deri_ik[2][1] + rik_sq * cc_3b_deri_ik[2][2];
+        const double d_bik[4] = {
+            cc_3b_ik[0][13] + 2.0 * rik * cc_3b_ik[0][14] + 3.0 * rik_sq * cc_3b_ik[0][15],
+            cc_3b_ik[1][9]  + 2.0 * rik * cc_3b_ik[1][10] + 3.0 * rik_sq * cc_3b_ik[1][11],
+            cc_3b_ik[2][5]  + 2.0 * rik * cc_3b_ik[2][6]  + 3.0 * rik_sq * cc_3b_ik[2][7],
+            cc_3b_ik[3][1]  + 2.0 * rik * cc_3b_ik[3][2]  + 3.0 * rik_sq * cc_3b_ik[3][3]
+        };
 
-        auto cc_3b_deri_jk = &(cached_constants_3b_deri[2][iknot_jk]);
-        basis_jk_der[0] = cc_3b_deri_jk[0][6] + rjk * cc_3b_deri_jk[0][7] + rjk_sq * cc_3b_deri_jk[0][8];
-        basis_jk_der[1] = cc_3b_deri_jk[1][3] + rjk * cc_3b_deri_jk[1][4] + rjk_sq * cc_3b_deri_jk[1][5];
-        basis_jk_der[2] = cc_3b_deri_jk[2][0] + rjk * cc_3b_deri_jk[2][1] + rjk_sq * cc_3b_deri_jk[2][2];
-
-        const double d_bij[4] = {basis_ij_der[0], basis_ij_der[1], basis_ij_der[2], 0.0};
-        const double d_bik[4] = {basis_ik_der[0], basis_ik_der[1], basis_ik_der[2], 0.0};
-        const double d_bjk[4] = {basis_jk_der[0], basis_jk_der[1], basis_jk_der[2], 0.0};
+        const double d_bjk[4] = {
+            cc_3b_jk[0][13] + 2.0 * rjk * cc_3b_jk[0][14] + 3.0 * rjk_sq * cc_3b_jk[0][15],
+            cc_3b_jk[1][9]  + 2.0 * rjk * cc_3b_jk[1][10] + 3.0 * rjk_sq * cc_3b_jk[1][11],
+            cc_3b_jk[2][5]  + 2.0 * rjk * cc_3b_jk[2][6]  + 3.0 * rjk_sq * cc_3b_jk[2][7],
+            cc_3b_jk[3][1]  + 2.0 * rjk * cc_3b_jk[3][2]  + 3.0 * rjk_sq * cc_3b_jk[3][3]
+        };
 
         const double dx_ij = del_rji[0] / rij;
         const double dy_ij = del_rji[1] / rij;
@@ -357,7 +396,6 @@ void ComputeUF3::compute_array()
 
             for (int n = 0; n < 4; n++) {
               
-              // Direct sparse mapping from the .pot file
               const double map_val = uf3_potential->n3b_coeff_array[map_to][iknot_ij + l][iknot_ik + m][iknot_jk + n];
               if (map_val < -0.5) continue; // Python dropped this column
 
@@ -386,7 +424,6 @@ void ComputeUF3::compute_array()
               const double fik_z = d_ik_part * dz_ik;
               const double fjk_z = d_jk_part * dz_jk;
 
-              // Pre-calculate specific atom force components
               const double Fi_x = fij_x + fik_x;
               const double Fi_y = fij_y + fik_y;
               const double Fi_z = fij_z + fik_z;
@@ -414,14 +451,13 @@ void ComputeUF3::compute_array()
 
               // 3-Body Virial Accumulation
               if (virial_flag) {
-                array_local[size_array_rows-6][sparse_col] += (del_rji[0] * Fj_x) + (del_rki[0] * Fk_x); // W_xx
-                array_local[size_array_rows-5][sparse_col] += (del_rji[1] * Fj_y) + (del_rki[1] * Fk_y); // W_yy
-                array_local[size_array_rows-4][sparse_col] += (del_rji[2] * Fj_z) + (del_rki[2] * Fk_z); // W_zz
-                array_local[size_array_rows-3][sparse_col] += (del_rji[2] * Fj_y) + (del_rki[2] * Fk_y); // W_zy
-                array_local[size_array_rows-2][sparse_col] += (del_rji[2] * Fj_x) + (del_rki[2] * Fk_x); // W_zx
-                array_local[size_array_rows-1][sparse_col] += (del_rji[1] * Fj_x) + (del_rki[1] * Fk_x); // W_yx
+                array_local[size_array_rows-6][sparse_col] += (del_rji[0] * Fj_x) + (del_rki[0] * Fk_x); 
+                array_local[size_array_rows-5][sparse_col] += (del_rji[1] * Fj_y) + (del_rki[1] * Fk_y); 
+                array_local[size_array_rows-4][sparse_col] += (del_rji[2] * Fj_z) + (del_rki[2] * Fk_z); 
+                array_local[size_array_rows-3][sparse_col] += (del_rji[2] * Fj_y) + (del_rki[2] * Fk_y); 
+                array_local[size_array_rows-2][sparse_col] += (del_rji[2] * Fj_x) + (del_rki[2] * Fk_x); 
+                array_local[size_array_rows-1][sparse_col] += (del_rji[1] * Fj_x) + (del_rki[1] * Fk_x); 
               }
-
             }
           }
         }
