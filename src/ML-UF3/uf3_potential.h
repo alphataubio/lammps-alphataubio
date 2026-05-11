@@ -16,6 +16,10 @@
 
 #include "pointers.h"
 
+#include <string>
+#include <vector>
+#include <unordered_map>
+
 namespace LAMMPS_NS {
 
 class UF3Potential : protected Pointers {
