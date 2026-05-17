@@ -33,7 +33,7 @@ class ComputePACE : public Compute {
   void compute_array() override;
   double memory_usage() override;
 
- private:
+ protected:
   int natoms, lastcol, ncoeff, ndims_force, ndims_virial;
   int bikflag, bik_rows, dgradflag, dgrad_rows;
   double cutmax, **pace, **paceall;
@@ -48,5 +48,5 @@ class ComputePACE : public Compute {
 
 }    // namespace LAMMPS_NS
 
-#endif
+#endif // !LMP_COMPUTE_PACE_H
 #endif
